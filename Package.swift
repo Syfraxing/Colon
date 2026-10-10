@@ -22,10 +22,6 @@ let package = Package(
                 "ColonCore",
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
                 .product(name: "Sparkle", package: "Sparkle"),
-            ],
-            linkerSettings: [
-                // Sparkle.framework is embedded in Colon.app/Contents/Frameworks by build-app.sh.
-                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             ]
         ),
         .testTarget(

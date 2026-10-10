@@ -152,9 +152,9 @@ contain:
   moment so suggestions fit the sentence. Never read from password fields.
 
 Nothing is sent to Jev when it is off or no key is set. The daily update check fetches
-`appcast.xml` from GitHub Releases (an HTTPS request that reveals only the Colon and macOS
-versions in its user agent, no system profile). Colon has no analytics or telemetry, and it
-never logs your keys, queries or typed text.
+`appcast.xml` from GitHub Releases (an HTTPS request whose user agent names only the Colon
+and Sparkle versions, e.g. `Colon/0.3.0 Sparkle/2.10.0`; no system profile is sent). Colon
+has no analytics or telemetry, and it never logs your keys, queries or typed text.
 
 ## Build from source
 
@@ -185,8 +185,11 @@ variable if set; otherwise it uses your first *Developer ID Application* certifi
 self-signed certificate works), and falls back to ad-hoc signing. Use a certificate if you
 can: macOS ties the Accessibility permission to the signature's designated requirement,
 and an ad-hoc signature changes on every build, so you'd have to re-grant Accessibility
-(`tccutil reset Accessibility so.slayer.Colon`) after each rebuild. Developer ID builds
-also get the hardened runtime and a secure timestamp.
+(`tccutil reset Accessibility so.slayer.Colon`) after each rebuild. Certificate-signed
+builds use the hardened runtime; Developer ID builds also get a secure timestamp.
+
+Local builds leave in-app updates off. If you set `SPARKLE_PUBLIC_KEY` to Colon's release
+key, the build will check the real feed and replace itself with the next official release.
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" make dmg

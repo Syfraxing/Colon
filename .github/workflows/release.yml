@@ -16,16 +16,23 @@ on:
 permissions:
   contents: write
 
+# One release at a time, never cancelled midway: the feed check and the appcast upload
+# must not interleave with another run.
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-feed
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Build & publish
     runs-on: macos-latest
     timeout-minutes: 45
+    # Holds COLON_SIGNING_P12, COLON_SIGNING_P12_PASSWORD and SPARKLE_ED_PRIVATE_KEY,
+    # deployable from v* tags only.
+    environment: release
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      BUILD: ${{ github.run_number }}
       REPO_URL: https://github.com/${{ github.repository }}
       FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
       # SHA-1 of the self-signed "Colon Release Signing" certificate, and the designated
@@ -35,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
 
       - name: Toolchain
@@ -49,43 +56,43 @@ jobs:
           UPDATE_FEED: ${{ inputs.update_feed }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z[-pre]"; exit 1; }
+          VERSION="${TAG#v}"
           PRERELEASE=false; [[ "$TAG" == *-* ]] && PRERELEASE=true
-          # The feed only moves forward: tag pushes of final releases, or an explicit re-run.
+          # Feed candidates: tag pushes of final releases, or an explicit re-run.
           PUBLISH_FEED=false
           if [[ "$PRERELEASE" == false ]] && { [[ "$EVENT" == push ]] || [[ "$UPDATE_FEED" == true ]]; }; then
             PUBLISH_FEED=true
           fi
-          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          # The feed only moves forward. A final tag older than the published release
+          # (a backport) ships as a normal, non-latest release without touching the feed.
+          if [[ "$PUBLISH_FEED" == true ]]; then
+            status=0
+            scripts/check-feed-forward.sh "$FEED_URL" "$BUILD" "$VERSION" || status=$?
+            if (( status == 3 )); then
+              if [[ "$EVENT" == push ]]; then
+                echo "::warning::$TAG is older than the published release; publishing it without updating the feed."
+                PUBLISH_FEED=false
+              else
+                echo "::error::update_feed was requested, but $TAG would move the feed backwards."
+                exit 1
+              fi
+            elif (( status != 0 )); then
+              exit "$status"
+            fi
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
           echo "PUBLISH_FEED=$PUBLISH_FEED" >> "$GITHUB_ENV"
-          echo "version ${TAG#v}, build ${{ github.run_number }}, prerelease $PRERELEASE, publish feed $PUBLISH_FEED"
+          echo "version $VERSION, build $BUILD, prerelease $PRERELEASE, publish feed $PUBLISH_FEED"
 
-      - name: Feed must move forward
-        if: env.PUBLISH_FEED == 'true'
-        env:
-          BUILD: ${{ github.run_number }}
-        run: |
-          if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/current-appcast.xml" "$FEED_URL"; then
-            echo "No published appcast yet; nothing to compare against."
-            exit 0
-          fi
-          read_tag() { xmllint --xpath "string((//*[local-name()='item'])[1]/*[local-name()='$1'])" "$RUNNER_TEMP/current-appcast.xml"; }
-          PUBLISHED_BUILD="$(read_tag version)"
-          PUBLISHED_VERSION="$(read_tag shortVersionString)"
-          echo "published: $PUBLISHED_VERSION ($PUBLISHED_BUILD); new: $VERSION ($BUILD)"
-          [[ "$PUBLISHED_BUILD" =~ ^[0-9]+$ ]] || { echo "::error::published sparkle:version '$PUBLISHED_BUILD' is not an integer"; exit 1; }
-          (( BUILD > PUBLISHED_BUILD )) || { echo "::error::build $BUILD is not newer than published $PUBLISHED_BUILD"; exit 1; }
-          if [[ "$(printf '%s\n%s\n' "$PUBLISHED_VERSION" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
-            echo "::error::$VERSION is older than the published $PUBLISHED_VERSION"
-            exit 1
-          fi
-
-      # Everything that runs untrusted-ish build code happens before any secret is touched.
+      # Everything that runs build code happens before any secret is touched.
       - name: Test
-        run: swift test
+        run: swift test --only-use-versions-from-resolved-file
 
       - name: Compile (universal)
-        run: swift build -c release --arch arm64 --arch x86_64
+        env:
+          COLON_RELEASE: '1'
+        run: scripts/build-app.sh --compile-only
 
       - name: Import signing certificate
         env:
@@ -95,11 +102,16 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/colon-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
           echo "::add-mask::$KEYCHAIN_PASSWORD"
-          P12="$RUNNER_TEMP/colon-signing.p12"
-          (umask 077 && printf '%s' "$P12_BASE64" | base64 --decode > "$P12")
+          echo "ORIGINAL_KEYCHAINS=$(security list-keychains -d user | tr -d '"' | xargs)" >> "$GITHUB_ENV"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Recorded at once so the cleanup step deletes it even if a later command fails.
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          P12="$RUNNER_TEMP/colon-signing.p12"
+          (umask 077 && printf '%s' "$P12_BASE64" | base64 --decode > "$P12")
+          # `security import` only takes the passphrase as an argument (-P) or from a GUI
+          # prompt; on this single-use runner it is visible to this job's processes only.
           security import "$P12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
           rm -f "$P12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
@@ -107,7 +119,6 @@ jobs:
           # Self-signed, so find-identity reports CSSMERR_TP_NOT_TRUSTED; codesign still signs.
           security find-identity -p codesigning "$KEYCHAIN" | grep -q "$SIGN_IDENTITY" \
             || { echo "::error::signing identity $SIGN_IDENTITY not in the imported certificate"; exit 1; }
-          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Build Colon.app (universal, release-signed)
         env:
@@ -124,6 +135,7 @@ jobs:
           REQUIREMENT="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
           [[ "$REQUIREMENT" == "$PINNED_REQUIREMENT" ]] \
             || { echo "::error::designated requirement is '$REQUIREMENT'"; exit 1; }
+          codesign -dv "$APP" 2>&1 | grep -q 'flags=.*runtime' || { echo "::error::app lacks the hardened runtime"; exit 1; }
           ARCHS="$(lipo -archs "$APP/Contents/MacOS/Colon")"
           [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]] \
             || { echo "::error::not universal: $ARCHS"; exit 1; }
@@ -142,7 +154,11 @@ jobs:
       - name: Delete signing keychain
         if: always()
         run: |
-          security list-keychains -d user -s ~/Library/Keychains/login.keychain-db
+          if [[ -n "${ORIGINAL_KEYCHAINS:-}" ]]; then
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
+          else
+            security list-keychains -d user -s ~/Library/Keychains/login.keychain-db
+          fi
           if [[ -n "${KEYCHAIN:-}" && -f "$KEYCHAIN" ]]; then security delete-keychain "$KEYCHAIN"; fi
           rm -f "$RUNNER_TEMP/colon-signing.p12"
 
@@ -162,6 +178,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # The live appcast may point at this release's zip; only a run that also
+            # publishes a matching appcast may replace it.
+            if [[ "$PUBLISH_FEED" != true ]]; then
+              echo "::error::release $TAG already exists; refusing to replace its assets without publishing the feed (re-run with update_feed, or delete the release first)."
+              exit 1
+            fi
             gh release upload "$TAG" dist/* --clobber
           else
             # Created as a draft so "latest" never points at a release without its appcast.
@@ -169,14 +191,12 @@ jobs:
             [[ "$PRERELEASE" == true ]] && FLAGS+=(--prerelease)
             gh release create "$TAG" dist/* "${FLAGS[@]}"
           fi
-          # The appcast goes up last: clients only see it once the archive is in place.
           if [[ "$PUBLISH_FEED" == true ]]; then
+            # Re-check right before the feed moves; the appcast goes up last, after the
+            # archive it points to.
+            scripts/check-feed-forward.sh "$FEED_URL" "$BUILD" "$VERSION"
             gh release upload "$TAG" "$RUNNER_TEMP/appcast.xml" --clobber
-          fi
-          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" == true ]]; then
-            if [[ "$PUBLISH_FEED" == true ]]; then
-              gh release edit "$TAG" --draft=false --latest
-            else
-              gh release edit "$TAG" --draft=false --latest=false
-            fi
+            gh release edit "$TAG" --draft=false --latest
+          else
+            gh release edit "$TAG" --draft=false --latest=false
           fi

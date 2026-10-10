@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Builds build/Colon.app from the SwiftPM package and code signs it.
 #
-# Usage: scripts/build-app.sh [--native] [--help]
+# Usage: scripts/build-app.sh [--native] [--compile-only] [--help]
 #
-#   --native   Build only for this Mac's architecture (faster; skips the universal
-#              arm64 + x86_64 build). Used automatically if the universal build fails.
+#   --native        Build only for this Mac's architecture (faster; skips the universal
+#                   arm64 + x86_64 build). Used automatically if the universal build fails.
+#   --compile-only  Run the SwiftPM build exactly as a full run would, then stop (no
+#                   bundle, no signing; release CI compiles before touching secrets).
 #
 # Environment:
 #   SIGN_IDENTITY     Code signing identity (name or SHA-1). Defaults to the first
@@ -18,15 +20,21 @@
 #   SPARKLE_PUBLIC_KEY  Sparkle EdDSA public key (base64) for SUPublicEDKey. Without it
 #                     the bundle keeps the placeholder and in-app updates stay disabled.
 #   COLON_RELEASE     Set to 1 for published builds: requires SPARKLE_PUBLIC_KEY and a
-#                     real SIGN_IDENTITY, and fails instead of falling back to one arch.
+#                     real SIGN_IDENTITY, uses only Package.resolved versions, and fails
+#                     instead of falling back to one arch.
 #   BUILD_DIR         Output directory (default: <repo>/build).
 #
 # Why the signature matters: macOS ties the Accessibility permission (TCC) to the
-# app's code signature. A certificate-backed signature (Apple Development or
-# Developer ID) has a stable designated requirement, so the permission survives
-# rebuilds. An ad-hoc signature changes with every build, so after each rebuild you
-# must remove Colon from System Settings > Privacy & Security > Accessibility and
-# grant it again.
+# app's code signature. A certificate-backed signature (Developer ID, Apple
+# Development, or a self-signed certificate such as "Colon Release Signing") has a
+# stable designated requirement, so the permission survives rebuilds and updates.
+# An ad-hoc signature changes with every build, so after each rebuild you must remove
+# Colon from System Settings > Privacy & Security > Accessibility and grant it again.
+#
+# Certificate-signed builds use the hardened runtime. Resources/Colon.entitlements
+# grants only com.apple.security.cs.disable-library-validation, because the embedded
+# Sparkle.framework is not signed by the same Apple team (a self-signed certificate
+# has no team at all), which library validation would otherwise refuse to load.
 #
 # Resource bundles: SwiftPM's generated `Bundle.module` accessor (Swift Build /
 # XCBuild flavour) looks in `Bundle.main.resourceURL` first, which for an app is
@@ -42,12 +50,14 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 APP_NAME="Colon"
 APP="$BUILD_DIR/$APP_NAME.app"
 NATIVE=0
+COMPILE_ONLY=0
 
-usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 for arg in "$@"; do
     case "$arg" in
         --native) NATIVE=1 ;;
+        --compile-only) COMPILE_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "error: unknown option '$arg'" >&2; usage >&2; exit 64 ;;
     esac
@@ -61,8 +71,10 @@ cd "$ROOT"
 
 if [[ "${COLON_RELEASE:-}" == 1 ]]; then
     [[ $NATIVE -eq 0 ]] || die "COLON_RELEASE=1 builds are universal; drop --native"
-    [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]] || die "COLON_RELEASE=1 needs SPARKLE_PUBLIC_KEY (release builds must be updatable)"
-    [[ -n "${SIGN_IDENTITY:-}" && "$SIGN_IDENTITY" != "-" ]] || die "COLON_RELEASE=1 needs a real SIGN_IDENTITY (never ad-hoc)"
+    if [[ $COMPILE_ONLY -eq 0 ]]; then
+        [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]] || die "COLON_RELEASE=1 needs SPARKLE_PUBLIC_KEY (release builds must be updatable)"
+        [[ -n "${SIGN_IDENTITY:-}" && "$SIGN_IDENTITY" != "-" ]] || die "COLON_RELEASE=1 needs a real SIGN_IDENTITY (never ad-hoc)"
+    fi
 fi
 
 # The KeyboardShortcuts dependency uses SwiftUI `#Preview`, whose macro plugin ships only
@@ -87,6 +99,9 @@ SWIFT_FLAGS=(-c release)
 if ! swift build --help 2>/dev/null | grep -q 'swiftbuild'; then
     SWIFT_FLAGS+=(--build-system xcode)
 fi
+if [[ "${COLON_RELEASE:-}" == 1 ]]; then
+    SWIFT_FLAGS+=(--only-use-versions-from-resolved-file)
+fi
 
 build() {
     local flags=("${SWIFT_FLAGS[@]}" "$@")
@@ -105,6 +120,11 @@ fi
 if [[ $NATIVE -eq 1 ]]; then
     log "Building native ($(uname -m)) release"
     build
+fi
+
+if [[ $COMPILE_ONLY -eq 1 ]]; then
+    log "Compiled into $BIN_DIR (--compile-only)"
+    exit 0
 fi
 
 EXECUTABLE="$BIN_DIR/$APP_NAME"
@@ -159,7 +179,7 @@ if (( ${#frameworks[@]} )); then
     for framework in "${frameworks[@]}"; do
         ditto "$framework" "$APP/Contents/Frameworks/$(basename "$framework")"
     done
-    # Package.swift already adds this rpath; capture first (grep -q + pipefail = SIGPIPE).
+    # The only place the rpath is set; capture first (grep -q + pipefail = SIGPIPE).
     load_commands="$(otool -l "$APP/Contents/MacOS/$APP_NAME")"
     if [[ "$load_commands" != *"@executable_path/../Frameworks"* ]]; then
         install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/$APP_NAME"
@@ -198,24 +218,22 @@ elif [[ "$SIGN_LABEL" == "Developer ID Application"* ]]; then
     log "Signing with $SIGN_LABEL (hardened runtime, secure timestamp)"
     SIGN_FLAGS+=(--options runtime --timestamp)
 else
-    log "Signing with $SIGN_LABEL"
-    SIGN_FLAGS+=(--timestamp=none)
+    log "Signing with $SIGN_LABEL (hardened runtime)"
+    SIGN_FLAGS+=(--options runtime --timestamp=none)
 fi
 
-# Sparkle's helpers are signed inside-out with the same identity and hardened runtime, as
-# Sparkle documents (they link system frameworks only): Updater.app and Autoupdate, then
-# the framework. The app's entitlements apply to the app only.
+# Sparkle's helpers are signed inside-out with the same identity and hardened runtime,
+# following Sparkle's recipe for non-Xcode builds: Updater.app and Autoupdate, then the
+# framework. Their original entitlements are not preserved (Autoupdate's restricted
+# application-identifier would need a provisioning profile).
 HELPER_FLAGS=("${SIGN_FLAGS[@]}")
 [[ " ${SIGN_FLAGS[*]} " == *" runtime "* ]] || HELPER_FLAGS+=(--options runtime)
 sign_framework() {
     local framework="$1" version item
     version="$(cd "$framework/Versions/Current" && pwd -P)"
-    for item in "$version"/*.app; do
-        codesign "${HELPER_FLAGS[@]}" --preserve-metadata=entitlements,flags "$item"
-    done
     for item in "$version"/*; do
-        if [[ -f "$item" && -x "$item" && ! -L "$item" && "$(basename "$item")" != "$(basename "$framework" .framework)" ]]; then
-            codesign "${HELPER_FLAGS[@]}" --preserve-metadata=entitlements,flags "$item"
+        if [[ "$item" == *.app || ( -f "$item" && -x "$item" && ! -L "$item" && "$(basename "$item")" != "$(basename "$framework" .framework)" ) ]]; then
+            codesign "${HELPER_FLAGS[@]}" "$item"
         fi
     done
     codesign "${HELPER_FLAGS[@]}" "$framework"
@@ -226,6 +244,14 @@ for framework in "$APP"/Contents/Frameworks/*.framework; do
     sign_framework "$framework"
 done
 shopt -u nullglob
+
+# A re-signed helper that the kernel refuses to run dies with SIGKILL (exit 137).
+# Autoupdate without arguments prints its usage and exits 1.
+set +e
+"$SPARKLE/Versions/Current/Autoupdate" >/dev/null 2>&1
+status=$?
+set -e
+(( status != 137 )) || die "macOS killed the re-signed Sparkle Autoupdate (code signature rejected)"
 
 APP_SIGN_FLAGS=("${SIGN_FLAGS[@]}")
 if [[ -f "$ROOT/Resources/Colon.entitlements" ]]; then
