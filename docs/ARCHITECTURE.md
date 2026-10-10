@@ -51,19 +51,22 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 - Context for Jev (`PredictionContext`): app name + bundle ID always; `textBeforeTrigger` only if `settings.sendTextContext`, read ON DEMAND via AX from the focused element's value (bounded to the last 300 chars before the trigger), never from captured keystrokes, never from secure fields.
 - Insertion default `.typing`: N backspaces then `keyboardSetUnicodeString` in ≤20 UTF-16 unit chunks; `.paste`: save pasteboard, set emoji, ⌘V, restore after ~250 ms.
 - Caret: AX `kAXSelectedTextRangeAttribute` + `kAXBoundsForRangeParameterizedAttribute`; fallbacks (Electron `AXManualAccessibility`, focused element frame, mouse location). Convert AX top-left coords to Cocoa bottom-left using the primary screen height.
+- Never do AX IPC inside the tap callback: caret rect / context are fetched on the main queue after the callback returns (or from a focused-element cache kept by an `AXObserver`). Set `AXManualAccessibility` only when the focused-element read comes back empty (Electron). Unknown/failed secure-field check fails closed (stay silent).
+- Poll tap health (`CGEvent.tapIsEnabled`) every few seconds and re-enable.
+- Default `minQueryLength` is 2 (Slack-like).
 
 ### Ranking (SuggestionEngine)
 - Local score: exact shortcode > shortcode prefix > keyword exact > keyword prefix > name word prefix > fuzzy subsequence; plus frecency boost.
 - Jev request: one `choice` question. Candidates (≤ 255, practical target ~60–120): top local matches + frecent + a curated pool of the most commonly used emoji so semantic queries (`:haha`, `:yay`, `:sus`) still find good answers. Option keys = `Emoji.id`, criteria = `"<char> <name>; keywords"`.
 - State: `{ "query": ..., "app": ..., "text_before": ... }`.
-- Blend: when Jev answers, order by `0.7 * jevProbability + 0.3 * normalizedLocal` (tunable); keep exact shortcode matches pinned first only if Jev agrees within tolerance. Reorder animates in the UI.
+- Blend: when Jev answers, order by `0.7 * jevProbability + 0.3 * normalizedLocal` (tunable); keep exact shortcode matches pinned first only if Jev agrees within tolerance. Reorder animates in the UI. Once the user has moved the highlight (arrow keys) for the current query, freeze the order (the picker keeps the highlighted emoji selected even if a late Jev answer arrives; it may update probabilities but must not reorder under the user).
 - Debounce ~60 ms, cancel stale tasks, LRU cache by (query, app). Timeouts 1.5 s. On error, keep local results and set `jevStatus`.
 - No key or `useJev == false` → local only, still great.
 
 ### Picker UI
-- Non-activating `NSPanel` (`.nonactivatingPanel`, `.borderless`, `level = .popUpMenu`, `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`, `hidesOnDeactivate = false`), never becomes key in inline mode.
+- Non-activating `NSPanel` (`.nonactivatingPanel`, `.borderless`, `level = .popUpMenu`, `collectionBehavior = [.fullScreenAuxiliary, .transient]` — no `.canJoinAllSpaces`, it flashes on Space swipes; dismiss on `NSWorkspace.activeSpaceDidChangeNotification`), `hidesOnDeactivate = false`, never becomes key in inline mode.
 - Glass: monocode-inspired. Neutral grey hsl(240 0% 9%) at ~40% over `NSVisualEffectView` `.hudWindow`/behind-window blur (Liquid Glass `NSGlassEffectView` on macOS 26+), 1px stroke = content 7%, selection fill = content 10–20%, accent `hsl(211 92% 62%)`, text hsl(240 0% 92%). Corner radius ~14. Ease `cubic-bezier(0.22, 1, 0.36, 1)`, 120–200 ms. Light mode: background 97%, content 18%.
-- Shows below the caret (above if no room), clamped to the screen's visibleFrame.
+- Shows below the caret (above if no room), clamped to the screen's visibleFrame. Anchor x to where the picker first opened (the trigger character) and keep it fixed while the query grows.
 
 ### Shell
 - Menu bar item (template icon), menu: Enabled toggle, Open Picker (shows shortcut), Jev status line, Settings…, Quit.

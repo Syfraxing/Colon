@@ -65,7 +65,7 @@ public final class AppSettings: ObservableObject {
         defaults.register(defaults: [
             Key.isEnabled: true,
             Key.triggerString: ":",
-            Key.minQueryLength: 1,
+            Key.minQueryLength: 2,
             Key.maxResults: 8,
             Key.useJev: true,
             Key.sendTextContext: false,
