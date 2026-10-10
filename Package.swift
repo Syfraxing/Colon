@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         .target(
             name: "ColonCore",
-            resources: [.copy("Resources/emoji.json")]
+            resources: [.copy("Resources/emoji.json"), .copy("Resources/i18n")]
         ),
         .executableTarget(
             name: "Colon",

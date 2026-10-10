@@ -5,14 +5,34 @@ import Foundation
 /// Tiers, best first: exact shortcode > shortcode prefix > keyword exact > keyword prefix >
 /// name-word prefix > fuzzy subsequence. Within a tier, the closer match wins, then personal
 /// frecency, then dataset (Unicode) order. Frecency never lifts an emoji into a better tier.
+/// Matching is case- and accent-insensitive (`TextFolding`). Keywords and name words of the extra
+/// search `languages` (CLDR) rank in the same keyword / name-word tiers as English ones.
 public struct EmojiSearch: Sendable {
     public let store: EmojiStore
     /// Source of frecency boosts; nil disables personalization.
     public let usage: UsageStore?
+    /// `SearchLanguages` codes searched besides English (codes without a bundled file are ignored).
+    public let languages: [String]
+    private let loadedLanguages: [EmojiStore.Language]
 
-    public init(store: EmojiStore = .shared, usage: UsageStore? = .shared) {
+    /// Loads each language's terms on first use (`EmojiStore.language`), so build searches
+    /// with new languages off the main thread.
+    public init(store: EmojiStore = .shared, usage: UsageStore? = .shared, languages: [String] = []) {
         self.store = store
         self.usage = usage
+        self.languages = languages
+        loadedLanguages = languages.compactMap { store.language($0) }
+    }
+
+    /// The emoji's CLDR names in the search languages (folded, e.g. `fata de caine` for 🐶 in
+    /// Romanian), skipping repeats. Lets Jev read candidates in the language the user typed.
+    public func localizedNames(of emoji: Emoji) -> [String] {
+        guard let index = store.index(ofID: emoji.id) else { return [] }
+        var names: [String] = []
+        for language in loadedLanguages {
+            if let name = language.names[index], !names.contains(name) { names.append(name) }
+        }
+        return names
     }
 
     /// Ranked local matches for `query` (no trigger char). Empty query returns nothing.
@@ -71,10 +91,14 @@ public struct EmojiSearch: Sendable {
             if score > best[index] { best[index] = score }
         }
 
-        let needle = Array(normalized.utf8)
-        collectPrefixMatches(needle, demotion: 0, offer: offer)
-        for stem in Self.stems(of: normalized) {
-            collectPrefixMatches(Array(stem.utf8), demotion: 1, offer: offer)
+        let folded = TextFolding.fold(normalized)
+        let needle = Array(folded.utf8)
+        collectPrefixMatches(needle, in: store.baseIndex, demotion: 0, offer: offer)
+        for stem in Self.stems(of: folded) {
+            collectPrefixMatches(Array(stem.utf8), in: store.baseIndex, demotion: 1, offer: offer)
+        }
+        for language in loadedLanguages {
+            collectPrefixMatches(needle, in: language.index, demotion: 0, offer: offer)
         }
         if touched.count < limit, needle.count >= 2 {
             collectFuzzyMatches(needle, offer: offer)
@@ -89,11 +113,12 @@ public struct EmojiSearch: Sendable {
         return ranked.prefix(limit).map { Suggestion(emoji: all[Int($0.index)], score: $0.score) }
     }
 
-    /// Walks every indexed term starting with `needle` (binary search + linear scan).
-    private func collectPrefixMatches(_ needle: [UInt8], demotion: Double, offer: (Int32, Double) -> Void) {
-        let terms = store.terms
+    /// Walks every term of `index` starting with `needle` (binary search + linear scan).
+    private func collectPrefixMatches(_ needle: [UInt8], in index: EmojiStore.TermIndex, demotion: Double,
+                                      offer: (Int32, Double) -> Void) {
+        let terms = index.terms
         let short = needle.count < 2
-        var i = store.lowerBound(needle)
+        var i = index.lowerBound(needle)
         while i < terms.count {
             let term = terms[i]
             i += 1

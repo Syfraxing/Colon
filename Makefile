@@ -29,7 +29,7 @@ clean: ## Remove all build products
 	swift package clean
 	rm -rf .build build dist
 
-emoji-data: ## Regenerate Sources/ColonCore/Resources/emoji.json
+emoji-data: ## Regenerate Sources/ColonCore/Resources/emoji.json and i18n/
 	python3 scripts/build-emoji-data.py
 
 icon: ## Regenerate the app icon in Resources/

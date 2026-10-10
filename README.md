@@ -51,6 +51,11 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
   editors where `:` means something else (Terminal, iTerm2, Ghostty, Warp, VS Code, Xcode,
   Zed, Cursor), and in password managers (1Password, Bitwarden, Passwords, Keychain
   Access). Add or remove apps in Settings → Excluded Apps.
+- **Your language too.** Search emoji names in 33 languages besides English (Unicode
+  CLDR): with Romanian on, `:inima` or `:inimă` finds ❤️ and `:caine` finds 🐶; with
+  Spanish, `:corazon` finds ❤️. Accents and case never matter, and English shortcodes
+  always work. Your macOS languages are on by default; pick more in Settings → General →
+  Search languages.
 - **Skin tones** applied automatically wherever an emoji supports them.
 - **Frecency.** Emoji you use often and recently float to the top.
 - **Private by design.** Never active in password fields, never keeps a log of your
@@ -141,7 +146,8 @@ with it.
 characters long. Requests go over HTTPS to `api.typesafe.ai` with no cookies or cache, and
 contain:
 - the query you typed after the trigger (e.g. `haha`);
-- the candidate emoji being ranked (emoji, name, keywords);
+- the candidate emoji being ranked (emoji, name, keywords, and for local matches their
+  names in your search languages);
 - the name and bundle ID of the app you're typing in (e.g. `Mail`, `com.apple.mail`);
 - **only if you opt in** to **Send text context** (off by default, Settings → Jev): up to
   300 characters of the text right before the trigger, read from the focused field at that
@@ -171,7 +177,7 @@ make install          # build, sign, copy to /Applications, launch
 | `make dmg` | Drag-to-install disk image at `dist/Colon-<version>.dmg`. |
 | `make test` | `swift test`. |
 | `make build` | Plain debug `swift build`. |
-| `make emoji-data` | Regenerate the bundled emoji dataset. |
+| `make emoji-data` | Regenerate the bundled emoji dataset and search-language files. |
 | `make icon` | Regenerate the app icon. |
 | `make clean` | Remove `.build`, `build`, `dist`. |
 
@@ -203,7 +209,8 @@ commit for anything that looks like an API key or token.
 
 A `CGEventTap` feeds keystrokes to a small, unit-tested state machine that recognizes
 `:query` at word boundaries. The query goes to a local index (shortcodes, names,
-keywords, fuzzy subsequence, frecency); the top candidates plus a pool of popular emoji
+keywords, the CLDR names and keywords of your search languages, fuzzy subsequence,
+frecency; case and accents ignored); the top candidates plus a pool of popular emoji
 are sent to Jev as a single choice question, and the results are blended and animated in
 place. The emoji is inserted by synthesizing Unicode keystrokes (or a clipboard paste that
 restores your clipboard afterwards). The details are in
@@ -219,8 +226,8 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) by Sindre Sorhus
   (MIT) powers the global hotkey and its recorder.
 - [Sparkle](https://sparkle-project.org) (MIT) delivers in-app updates.
-- Emoji names and keywords come from Unicode emoji data; see
-  `scripts/build-emoji-data.py` for the exact sources and their licenses.
+- Emoji names and keywords come from Unicode emoji data and, for other languages, Unicode
+  CLDR annotations; see `scripts/build-emoji-data.py` for the exact sources and their licenses.
 - Ranking by [Jev](https://typesafe.ai) from TypeSafe AI.
 - Inspired by [Rocket](https://matthewpalmer.net/rocket/), which showed how good
   system-wide emoji autocomplete can feel.

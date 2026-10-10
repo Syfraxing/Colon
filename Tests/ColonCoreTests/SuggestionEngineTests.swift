@@ -7,6 +7,8 @@ final class FakeJev: JevRanking, @unchecked Sendable {
         let query: String
         let context: PredictionContext
         let candidates: [String]
+        /// Option text Jev would get per candidate id (`JevClient.criterion`).
+        let criteria: [String: String]
     }
 
     private let lock = NSLock()
@@ -30,7 +32,9 @@ final class FakeJev: JevRanking, @unchecked Sendable {
 
     func rank(query: String, context: PredictionContext, candidates: [Emoji]) async throws -> [String: Double] {
         let (answer, delay, failure) = lock.withLock {
-            recorded.append(Call(query: query, context: context, candidates: candidates.map(\.id)))
+            recorded.append(Call(query: query, context: context, candidates: candidates.map(\.id),
+                                 criteria: Dictionary(candidates.map { ($0.id, JevClient.criterion(for: $0)) },
+                                                      uniquingKeysWith: { first, _ in first })))
             return (answers[query], delays[query] ?? .zero, self.failure)
         }
         try await Task.sleep(for: delay)
@@ -47,7 +51,9 @@ final class SuggestionEngineTests: XCTestCase {
 
     override func setUp() async throws {
         usageURL = FileManager.default.temporaryDirectory.appendingPathComponent("usage-\(UUID().uuidString).json")
-        settings = AppSettings(defaults: UserDefaults(suiteName: "ColonTests-\(UUID().uuidString)")!)
+        // English-only regardless of the machine's languages; language tests opt in.
+        settings = AppSettings(defaults: UserDefaults(suiteName: "ColonTests-\(UUID().uuidString)")!,
+                               preferredLanguages: ["en-US"])
         settings.maxResults = 8
         settings.useJev = true
         settings.sendTextContext = true
@@ -404,5 +410,48 @@ final class SuggestionEngineTests: XCTestCase {
         XCTAssertNil(cache["b"])
         XCTAssertEqual(cache["c"], 3)
         XCTAssertEqual(cache.count, 2)
+    }
+
+    // MARK: - Search languages
+
+    func testLocalizedQueryKeepsLocalResultsWhenJevDisagrees() async {
+        settings.searchLanguages = ["ro"]
+        let engine = makeEngine()
+        await engine.reloadLanguages(["ro"]).value
+        jev.answer("inima", ["joy": 0.9, "heart": 0.01])
+        engine.update(query: "inima", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.first?.emoji.char, "❤️")
+        await waitUntil { !engine.isRefining }
+        XCTAssertTrue(ids(engine).contains("heart"), "local localized match survives the blend: \(ids(engine))")
+        XCTAssertEqual(jev.calls.last?.query, "inima", "Jev gets the query as typed")
+    }
+
+    func testJevCandidatesCarryLocalizedNames() async throws {
+        settings.searchLanguages = ["ro"]
+        let engine = makeEngine()
+        await engine.reloadLanguages(["ro"]).value
+        engine.update(query: "caine", context: PredictionContext())
+        await waitUntil { !engine.isRefining }
+        let call = try XCTUnwrap(jev.calls.last)
+        XCTAssertEqual(call.candidates.first, "dog")
+        XCTAssertTrue(call.criteria["dog"]?.hasPrefix("🐶 dog face; fata de caine, ") == true, "\(call.criteria["dog"] ?? "")")
+        // Popular candidates that matched nothing locally keep the plain English text.
+        XCTAssertEqual(call.criteria["joy"], JevClient.criterion(for: EmojiStore.shared.emoji(id: "joy")!))
+    }
+
+    func testChangingSearchLanguagesReloadsSearch() async {
+        let engine = makeEngine()
+        await engine.reloadLanguages(settings.searchLanguages).value
+        engine.update(query: "corazon", context: PredictionContext())
+        XCTAssertFalse(ids(engine).contains("heart"))
+        engine.reset()
+
+        settings.searchLanguages = ["es"]
+        await waitUntil {
+            engine.reset()
+            engine.update(query: "corazon", context: PredictionContext())
+            return engine.suggestions.first?.id == "heart"
+        }
+        XCTAssertEqual(ids(engine).first, "heart")
     }
 }
