@@ -29,8 +29,13 @@ jobs:
     timeout-minutes: 45
     # Holds COLON_SIGNING_P12, COLON_SIGNING_P12_PASSWORD (the Developer ID Application
     # certificate), NOTARY_API_KEY, NOTARY_KEY_ID, NOTARY_ISSUER_ID (App Store Connect API
-    # key, Developer role) and SPARKLE_ED_PRIVATE_KEY, deployable from v* tags only.
+    # key, Developer role), SPARKLE_ED_PRIVATE_KEY and HOMEBREW_TAP_DEPLOY_KEY (the homebrew
+    # job's), deployable from v* tags only.
     environment: release
+    outputs:
+      version: ${{ steps.kind.outputs.version }}
+      publish_feed: ${{ steps.kind.outputs.publish_feed }}
+      dmg_sha256: ${{ steps.dmg.outputs.sha256 }}
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
       BUILD: ${{ github.run_number }}
@@ -55,6 +60,7 @@ jobs:
           swift --version
 
       - name: Release kind
+        id: kind
         env:
           EVENT: ${{ github.event_name }}
           UPDATE_FEED: ${{ inputs.update_feed }}
@@ -87,6 +93,7 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
           echo "PUBLISH_FEED=$PUBLISH_FEED" >> "$GITHUB_ENV"
+          printf 'version=%s\npublish_feed=%s\n' "$VERSION" "$PUBLISH_FEED" >> "$GITHUB_OUTPUT"
           echo "version $VERSION, build $BUILD, prerelease $PRERELEASE, publish feed $PUBLISH_FEED"
 
       # Everything that runs build code happens before any secret is touched.
@@ -174,6 +181,7 @@ jobs:
           scripts/make-dmg.sh
 
       - name: Notarize and staple DMG
+        id: dmg
         env:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
@@ -181,6 +189,7 @@ jobs:
           scripts/notarize.sh "dist/Colon-$VERSION.dmg"
           spctl --assess --type open --context context:primary-signature --verbose=2 "dist/Colon-$VERSION.dmg"
           cd dist && shasum -a 256 Colon-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+          echo "sha256=$(shasum -a 256 "Colon-$VERSION.dmg" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Delete signing keychain
         if: always()
@@ -234,3 +243,42 @@ jobs:
           else
             gh release edit "$TAG" --draft=false --latest=false
           fi
+
+  # Points syfraxing/tap/colon at a release that moved the feed. A job of its own: by now the
+  # release is fully published, so a failed bump leaves it intact, turns the run red, and is
+  # retried with "Re-run failed jobs" without rebuilding or re-notarizing anything.
+  homebrew:
+    name: Bump Homebrew cask
+    needs: release
+    if: needs.release.outputs.publish_feed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # HOMEBREW_TAP_DEPLOY_KEY: an ed25519 deploy key with write access to Syfraxing/homebrew-tap only.
+    environment: release
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      DMG_SHA256: ${{ needs.release.outputs.dmg_sha256 }}
+      TAP_REMOTE: git@github.com:Syfraxing/homebrew-tap.git
+      # github.com's host key, from https://api.github.com/meta.
+      GITHUB_HOST_KEY: github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+
+      - name: Bump Casks/colon.rb
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          KEY="$RUNNER_TEMP/tap-deploy-key"
+          trap 'rm -f "$KEY"' EXIT
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$KEY")
+          printf '%s\n' "$GITHUB_HOST_KEY" > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          git clone --quiet "$TAP_REMOTE" "$RUNNER_TEMP/tap"
+          scripts/bump-cask.sh --push "$RUNNER_TEMP/tap" "$VERSION" "$DMG_SHA256"
