@@ -472,12 +472,20 @@ final class InputController: ObservableObject {
         if wasVisible, notifyDelegate { delegate?.inputHide() }
     }
 
+    /// Abandons a capture after `idleTimeout` without a keystroke. Resting the pointer on the
+    /// picker counts as activity: the user is about to click a row, so the picker must not vanish
+    /// from under the click.
     private func scheduleIdleTimeout() {
         idleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.delegate?.inputIsPointInPicker(NSEvent.mouseLocation) == true {
+                    self.scheduleIdleTimeout()
+                    return
+                }
                 InputLog.debug("capture idle timeout")
-                self?.resetCapture()
+                self.resetCapture()
             }
         }
         idleWork = work

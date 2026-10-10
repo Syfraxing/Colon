@@ -59,7 +59,7 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 - Local score: exact shortcode > shortcode prefix > keyword exact > keyword prefix > name word prefix > fuzzy subsequence; plus frecency boost.
 - Jev request: one `choice` question. Candidates (≤ 255, practical target ~60–120): top local matches + frecent + a curated pool of the most commonly used emoji so semantic queries (`:haha`, `:yay`, `:sus`) still find good answers. Option keys = `Emoji.id`, criteria = `"<char> <name>; keywords"`.
 - State: `{ "query": ..., "app": ..., "text_before": ... }`.
-- Blend: when Jev answers, order by `0.7 * jevProbability + 0.3 * normalizedLocal` (tunable); keep exact shortcode matches pinned first only if Jev agrees within tolerance. Reorder animates in the UI. Once the user has moved the highlight (arrow keys) for the current query, freeze the order (the picker keeps the highlighted emoji selected even if a late Jev answer arrives; it may update probabilities but must not reorder under the user).
+- Blend: when Jev answers, order by `0.7 * jevProbability + 0.3 * normalizedLocal` (tunable); keep exact shortcode matches pinned first only if Jev agrees within tolerance. Reorder animates in the UI. Once the user has moved the highlight (arrow keys) or pointed at a row with the mouse for the current query, freeze the order (the picker keeps the highlighted emoji selected even if a late Jev answer arrives; it may update probabilities but must not reorder under the user).
 - Debounce ~60 ms, cancel stale tasks, LRU cache by (query, app). Timeouts 1.5 s. On error, keep local results and set `jevStatus`.
 - No key or `useJev == false` → local only, still great.
 
