@@ -125,3 +125,36 @@ enum ShellActivation {
         }
     }
 }
+
+/// Menu bar glyph drawn in code (the executable has no image resources): the app icon's face as
+/// a template image — rounded square, colon eyes, smile — so it matches the Dock/Settings icon.
+enum MenuBarIcon {
+    static let face: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let box = NSRect(x: 1.75, y: 1.25, width: 14.5, height: 14.5)
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+
+            let outline = NSBezierPath(roundedRect: box, xRadius: 4.2, yRadius: 4.2)
+            outline.lineWidth = 1.5
+            outline.stroke()
+
+            let eye = NSSize(width: 1.9, height: 3.2)
+            for centerX in [box.midX - 2.75, box.midX + 2.75] {
+                let rect = NSRect(x: centerX - eye.width / 2, y: box.midY + 0.6, width: eye.width, height: eye.height)
+                NSBezierPath(roundedRect: rect, xRadius: eye.width / 2, yRadius: eye.width / 2).fill()
+            }
+
+            let smile = NSBezierPath()
+            smile.appendArc(withCenter: NSPoint(x: box.midX, y: box.midY + 0.9), radius: 4,
+                            startAngle: 212, endAngle: 328, clockwise: false)
+            smile.lineWidth = 1.6
+            smile.lineCapStyle = .round
+            smile.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Emojify"
+        return image
+    }()
+}

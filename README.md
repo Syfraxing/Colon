@@ -64,7 +64,7 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 
 | Hotkey search | Settings |
 | --- | --- |
-| ![Search mode](docs/screenshots/search.png) | ![Settings window](docs/screenshots/settings.png) |
+| ![Search mode](docs/screenshots/search-dark.png) | ![Settings window](docs/screenshots/settings-jev.png) |
 
 ## Install
 

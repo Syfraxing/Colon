@@ -534,7 +534,7 @@ Nothing is swallowed when the picker isn't visible, in excluded apps, or in secu
 - If focus changes during a capture (PID or `AXFocusedUIElement` differs) → cancel silently, hide.
 - If insertion target isn't editable (read-only, non-text role) → copy to clipboard and show a 1.5 s "Copied 😂" toast.
 - Secure fields, terminals, IDEs, apps with native `:` pickers → inactive by default; one-click "Disable in <App>" in the menu.
-- Idle timeout: if no keystroke for 10 s while capturing → hide and reset.
+- Idle timeout: if no keystroke for 10 s while capturing → hide and reset (the pointer resting on the picker counts as activity).
 - First-run: onboarding ends in a live text field so the user tries `:haha` immediately.
 
 ---

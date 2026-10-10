@@ -55,8 +55,9 @@ struct PickerTheme {
     var text: Color { isDark ? Color(white: 0.92) : Color(white: 0.11) }
     var secondary: Color { text.opacity(0.55) }
     var tertiary: Color { text.opacity(isDark ? 0.36 : 0.42) }
-    /// Neutral tint layered over the blur: hsl(240 0% 9%) / 40% on dark, 97% on light.
-    var tint: Color { isDark ? Color(white: 0.09).opacity(0.42) : Color(white: 0.97).opacity(0.55) }
+    /// Neutral tint layered over the blur: hsl(240 0% 9%) / 40% on dark, 97% on light. The
+    /// light tint is heavier so the card reads as paper-white, not grey, over bright documents.
+    var tint: Color { isDark ? Color(white: 0.09).opacity(0.42) : Color(white: 0.97).opacity(0.68) }
     var hairline: Color { content.opacity(isDark ? 0.09 : 0.10) }
     var divider: Color { content.opacity(isDark ? 0.07 : 0.08) }
     var selection: Color { content.opacity(isDark ? 0.13 : 0.10) }

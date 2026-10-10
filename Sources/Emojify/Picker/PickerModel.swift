@@ -173,11 +173,12 @@ final class PickerModel: ObservableObject {
         if mode == .search { requestScroll("row/\(suggestions[next].id)") }
     }
 
-    /// Mouse hover / programmatic selection of a row.
+    /// Mouse hover / programmatic selection of a row. Pointing at any row, the highlighted one
+    /// included, freezes the order so a late Jev rerank cannot swap the row under the pointer.
     func selectRow(_ index: Int) {
-        guard suggestions.indices.contains(index), index != selectedIndex else { return }
+        guard suggestions.indices.contains(index) else { return }
         userMovedHighlight = true
-        setSelection(index)
+        if index != selectedIndex { setSelection(index) }
     }
 
     private func setSelection(_ index: Int) {

@@ -53,14 +53,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func applyEnabled(_ isEnabled: Bool) {
         guard let button = statusItem.button else { return }
-        let symbol = switch inputStatus {
-        case .noPermission: "exclamationmark.triangle"
-        case .secureInput: "lock"
-        case .running, .disabled: "face.smiling"
+        let image: NSImage? = switch inputStatus {
+        case .noPermission: Self.statusSymbol("exclamationmark.triangle")
+        case .secureInput: Self.statusSymbol("lock")
+        case .running, .disabled: MenuBarIcon.face
         }
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Emojify")?
-            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
-        image?.isTemplate = true
         button.image = image
         button.appearsDisabled = !isEnabled || inputStatus != .running
         button.toolTip = isEnabled ? (statusMessage ?? "Emojify") : "Emojify (off)"
@@ -158,6 +155,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func symbol(_ name: String) -> NSImage? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)
+    }
+
+    /// Status-bar sized SF Symbol for the paused/blocked states.
+    private static func statusSymbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: "Emojify")?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
     }
 
     private static func dot(color: NSColor) -> NSImage {

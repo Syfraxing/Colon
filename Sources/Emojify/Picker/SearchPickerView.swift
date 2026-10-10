@@ -20,10 +20,8 @@ struct SearchPickerView: View {
                         EmojiGrid(model: model, theme: theme)
                     }
                 } else if model.suggestions.isEmpty {
-                    EmptyResultsView(query: model.searchText, theme: theme)
-                        .frame(height: PickerMetrics.emptyHeight)
-                        .padding(PickerMetrics.listInset)
-                        .frame(maxHeight: .infinity, alignment: .top)
+                    EmptyResultsView(query: model.searchText.trimmingCharacters(in: .whitespaces), theme: theme)
+                        .transition(.opacity)
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView(.vertical) {
@@ -225,8 +223,9 @@ private struct SearchFooter: View {
     let theme: PickerTheme
 
     var body: some View {
+        let emoji = model.showsGrid ? model.selectedGridEmoji : model.selectedSuggestion?.emoji
         HStack(spacing: 10) {
-            if let emoji = model.showsGrid ? model.selectedGridEmoji : model.selectedSuggestion?.emoji {
+            if let emoji {
                 Text(model.displayText(emoji))
                     .font(.system(size: 26))
                     .frame(width: 32)
@@ -243,13 +242,16 @@ private struct SearchFooter: View {
                 .transaction { $0.animation = nil }
             }
             Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Keycap(model.showsGrid ? "←↑↓→" : "↑↓", theme: theme)
-                Text("move").foregroundStyle(theme.tertiary)
-                Keycap("↩", theme: theme).padding(.leading, 4)
-                Text("insert").foregroundStyle(theme.tertiary)
+            if emoji != nil {
+                HStack(spacing: 6) {
+                    Keycap(model.showsGrid ? "←↑↓→" : "↑↓", theme: theme)
+                    Text("move").foregroundStyle(theme.tertiary)
+                    Keycap("↩", theme: theme).padding(.leading, 4)
+                    Text("insert").foregroundStyle(theme.tertiary)
+                }
+                .font(.system(size: 10.5, weight: .medium))
+                .fixedSize()
             }
-            .font(.system(size: 10.5, weight: .medium))
         }
         .padding(.horizontal, 14)
         .frame(maxHeight: .infinity)

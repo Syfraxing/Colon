@@ -110,8 +110,9 @@ struct InlinePickerView: View {
         VStack(spacing: 0) {
             Group {
                 if model.suggestions.isEmpty {
-                    EmptyResultsView(query: model.query, theme: theme)
-                        .frame(height: PickerMetrics.emptyHeight)
+                    // Never on screen (the controller hides an empty inline panel); keeps the
+                    // card at `inlineCardHeight(rows: 0)` so hit-testing and layout agree.
+                    Color.clear.frame(height: PickerMetrics.emptyHeight)
                 } else {
                     SuggestionList(model: model, theme: theme, interactive: false)
                         .frame(height: CGFloat(model.suggestions.count) * PickerMetrics.rowHeight, alignment: .top)
@@ -193,16 +194,20 @@ struct SuggestionRow: View {
             Text(glyph)
                 .font(.system(size: 22))
                 .frame(width: 26, height: 26)
+                .scaleEffect(isSelected ? 1.08 : 1)
+                .animation(.pickerEase(0.16), value: isSelected)
             ShortcodeText(code: code, query: query, theme: theme, isSelected: isSelected)
                 .layoutPriority(1)
             Spacer(minLength: 8)
             if let probability = suggestion.jevProbability {
-                JevMeter(probability: probability, theme: theme)
+                JevMeter(probability: probability, isSelected: isSelected, theme: theme)
             } else if !Self.nameRepeats(code: code, name: suggestion.emoji.name) {
-                // Full name, else a truncated one with real words, else nothing (never a stray letter).
+                // The full name, else the longest run of whole words that fits, else nothing:
+                // never "grinning fac…".
                 ViewThatFits(in: .horizontal) {
-                    nameText.fixedSize()
-                    nameText.frame(width: 72, alignment: .trailing)
+                    ForEach(Self.wordPrefixes(of: suggestion.emoji.name), id: \.self) { name in
+                        nameText(name).fixedSize()
+                    }
                     Color.clear.frame(width: 0, height: 0)
                 }
             }
@@ -216,12 +221,32 @@ struct SuggestionRow: View {
         code.replacingOccurrences(of: "_", with: " ").lowercased() == name.lowercased()
     }
 
-    private var nameText: some View {
-        Text(suggestion.emoji.name)
+    /// Connectors that open a trailing clause ("… with smiling eyes").
+    private static let connectors: Set<String> = ["with", "of", "and", "in", "on", "or", "for", "to"]
+
+    /// "grinning face with smiling eyes" → [itself, "grinning face", "grinning"]: whole clauses
+    /// go first, then single words, so a shortened name still reads as a phrase.
+    static func wordPrefixes(of name: String) -> [String] {
+        let words = name.split(separator: " ").map(String.init)
+        var result = [name]
+        var end = words.count
+        while end > 1 {
+            if let cut = words[..<end].lastIndex(where: { connectors.contains($0.lowercased()) }), cut > 0 {
+                end = cut
+            } else {
+                end -= 1
+            }
+            let prefix = words[..<end].joined(separator: " ")
+            if prefix != result.last { result.append(prefix) }
+        }
+        return result
+    }
+
+    private func nameText(_ name: String) -> some View {
+        Text(name)
             .font(.system(size: 11))
             .foregroundStyle(theme.tertiary)
             .lineLimit(1)
-            .truncationMode(.tail)
     }
 }
 
@@ -267,54 +292,59 @@ struct ShortcodeText: View {
     }
 }
 
-/// Tiny probability bar + percentage once Jev has scored a row.
+/// Tiny probability bar + percentage once Jev has scored a row. Quiet by default so the
+/// shortcodes stay the headline; the highlighted row's figure steps up to secondary.
 struct JevMeter: View {
     let probability: Double
+    let isSelected: Bool
     let theme: PickerTheme
 
     var body: some View {
         let p = min(max(probability, 0), 1)
         HStack(spacing: 6) {
             Capsule()
-                .fill(theme.content.opacity(theme.isDark ? 0.12 : 0.10))
+                .fill(theme.content.opacity(theme.isDark ? 0.09 : 0.08))
                 .frame(width: 28, height: 3)
                 .overlay(alignment: .leading) {
                     Capsule()
-                        .fill(theme.accent)
+                        .fill(theme.accent.opacity(isSelected ? 1 : 0.8))
                         .frame(width: max(3, 28 * p), height: 3)
                 }
             Text(p < 0.01 ? "<1%" : "\(Int((p * 100).rounded()))%")
                 .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(theme.secondary)
+                .foregroundStyle(isSelected ? theme.secondary : theme.tertiary)
                 .frame(minWidth: 26, alignment: .trailing)
+                .contentTransition(.numericText())
         }
         .animation(.pickerEase(0.25), value: p)
+        .animation(.pickerEase(0.16), value: isSelected)
     }
 }
 
+/// Search mode's "nothing matched", centred in the results area. (Inline mode has no empty
+/// state: the panel hides itself when the list is empty.)
 struct EmptyResultsView: View {
     let query: String
     let theme: PickerTheme
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 6) {
             Text("🫥")
-                .font(.system(size: 20))
-                .frame(width: 26)
-                .opacity(0.85)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(query.isEmpty ? "No emoji yet" : "No emoji for :\(query)")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(theme.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Keep typing, or try another word")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.tertiary)
-            }
-            Spacer(minLength: 0)
+                .font(.system(size: 34))
+                .opacity(0.9)
+                .padding(.bottom, 4)
+            Text(query.isEmpty ? "No emoji yet" : "No emoji for “\(query)”")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("Try another word, or a shortcode like “tada”")
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.tertiary)
         }
-        .padding(.horizontal, 10)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -357,6 +387,8 @@ struct Keycap: View {
         Text(label)
             .font(.system(size: 10, weight: .semibold, design: .rounded))
             .foregroundStyle(theme.secondary)
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 4)
             .frame(minWidth: 17, minHeight: 16)
             .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(theme.keycapFill))
