@@ -181,6 +181,8 @@ final class GIFPickerController: @preconcurrency GIFPicking {
 
     private func focusSearchField(retries: Int) {
         if let field = model.searchField, field.window === panel {
+            // SwiftUI may not have pushed the pre-filled text into the field yet.
+            if field.stringValue != model.searchText { field.stringValue = model.searchText }
             panel.makeFirstResponder(field)
             if let editor = field.currentEditor() as? NSTextView {
                 editor.insertionPointColor = NSColor(PickerTheme.accent)
