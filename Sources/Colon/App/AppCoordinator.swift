@@ -15,7 +15,8 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     private(set) lazy var engine = SuggestionEngine(settings: settings)
     private lazy var input = InputController(settings: settings)
     private lazy var picker = PickerPanelController(engine: engine, settings: settings)
-    private lazy var settingsWindow = SettingsWindowController(settings: settings, engine: engine)
+    let updater = Updater()
+    private lazy var settingsWindow = SettingsWindowController(settings: settings, engine: engine, updater: updater)
     private var statusItem: StatusItemController?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -26,7 +27,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         // Load the dataset now: the tap callback must never pay for the first JSON load.
         _ = EmojiStore.shared.all.count
 
-        let statusItem = StatusItemController(settings: settings, engine: engine)
+        let statusItem = StatusItemController(settings: settings, engine: engine, updater: updater)
         self.statusItem = statusItem
         statusItem.onOpenSettings = { [weak self] in self?.openSettingsOrOnboarding() }
         statusItem.onOpenPicker = { [weak self] in self?.toggleSearch() }
@@ -51,6 +52,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
         input.start()
         settingsWindow.showOnboardingIfNeeded()
+        updater.start()
     }
 
     /// Re-opening the app from Finder/Spotlight while it runs shows Settings.

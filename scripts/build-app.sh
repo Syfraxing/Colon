@@ -15,6 +15,10 @@
 #                     Set SIGN_IDENTITY=- to force ad-hoc signing.
 #   COLON_VERSION   Overrides CFBundleShortVersionString (a leading "v" is stripped).
 #   COLON_BUILD     Overrides CFBundleVersion.
+#   SPARKLE_PUBLIC_KEY  Sparkle EdDSA public key (base64) for SUPublicEDKey. Without it
+#                     the bundle keeps the placeholder and in-app updates stay disabled.
+#   COLON_RELEASE     Set to 1 for published builds: requires SPARKLE_PUBLIC_KEY and a
+#                     real SIGN_IDENTITY, and fails instead of falling back to one arch.
 #   BUILD_DIR         Output directory (default: <repo>/build).
 #
 # Why the signature matters: macOS ties the Accessibility permission (TCC) to the
@@ -39,7 +43,7 @@ APP_NAME="Colon"
 APP="$BUILD_DIR/$APP_NAME.app"
 NATIVE=0
 
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 for arg in "$@"; do
     case "$arg" in
@@ -54,6 +58,12 @@ warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 cd "$ROOT"
+
+if [[ "${COLON_RELEASE:-}" == 1 ]]; then
+    [[ $NATIVE -eq 0 ]] || die "COLON_RELEASE=1 builds are universal; drop --native"
+    [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]] || die "COLON_RELEASE=1 needs SPARKLE_PUBLIC_KEY (release builds must be updatable)"
+    [[ -n "${SIGN_IDENTITY:-}" && "$SIGN_IDENTITY" != "-" ]] || die "COLON_RELEASE=1 needs a real SIGN_IDENTITY (never ad-hoc)"
+fi
 
 # The KeyboardShortcuts dependency uses SwiftUI `#Preview`, whose macro plugin ships only
 # with full Xcode. Command Line Tools alone fail deep in the build with
@@ -87,6 +97,7 @@ build() {
 if [[ $NATIVE -eq 0 ]]; then
     log "Building universal (arm64 + x86_64) release"
     if ! build --arch arm64 --arch x86_64; then
+        [[ "${COLON_RELEASE:-}" == 1 ]] && die "universal build failed (COLON_RELEASE=1 never falls back to one architecture)"
         warn "universal build failed; retrying for $(uname -m) only (pass --native to skip the attempt)"
         NATIVE=1
     fi
@@ -116,6 +127,13 @@ fi
 if [[ -n "${COLON_BUILD:-}" ]]; then
     plutil -replace CFBundleVersion -string "$COLON_BUILD" "$PLIST"
 fi
+if [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]]; then
+    [[ "$(printf '%s' "$SPARKLE_PUBLIC_KEY" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" == 32 ]] \
+        || die "SPARKLE_PUBLIC_KEY is not a base64 Ed25519 public key (expected 32 bytes)"
+    plutil -replace SUPublicEDKey -string "$SPARKLE_PUBLIC_KEY" "$PLIST"
+else
+    log "No SPARKLE_PUBLIC_KEY; in-app updates are disabled in this build"
+fi
 plutil -lint "$PLIST" >/dev/null
 
 if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
@@ -133,17 +151,24 @@ for bundle in "${bundles[@]}"; do
     ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"
 done
 
-# Dynamic package products (none today) go to Contents/Frameworks.
-frameworks=("$BIN_DIR"/PackageFrameworks/*.framework)
+# Dynamic frameworks (Sparkle) go to Contents/Frameworks. Swift Build puts binary
+# xcframework slices next to the executable; older build systems use PackageFrameworks.
+frameworks=("$BIN_DIR"/*.framework "$BIN_DIR"/PackageFrameworks/*.framework)
 if (( ${#frameworks[@]} )); then
     mkdir -p "$APP/Contents/Frameworks"
     for framework in "${frameworks[@]}"; do
         ditto "$framework" "$APP/Contents/Frameworks/$(basename "$framework")"
     done
-    if ! otool -l "$APP/Contents/MacOS/$APP_NAME" | grep -q '@executable_path/../Frameworks'; then
+    # Package.swift already adds this rpath; capture first (grep -q + pipefail = SIGPIPE).
+    load_commands="$(otool -l "$APP/Contents/MacOS/$APP_NAME")"
+    if [[ "$load_commands" != *"@executable_path/../Frameworks"* ]]; then
         install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/$APP_NAME"
     fi
 fi
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+[[ -d "$SPARKLE" ]] || die "Sparkle.framework missing from $BIN_DIR"
+# Sparkle's XPC services exist for sandboxed apps only; Colon is not sandboxed.
+rm -rf "$SPARKLE/XPCServices" "$SPARKLE"/Versions/*/XPCServices
 shopt -u nullglob
 
 # Extended attributes (Finder info, quarantine) make codesign reject the bundle.
@@ -176,16 +201,37 @@ else
     log "Signing with $SIGN_LABEL"
     SIGN_FLAGS+=(--timestamp=none)
 fi
-if [[ -f "$ROOT/Resources/Colon.entitlements" ]]; then
-    SIGN_FLAGS+=(--entitlements "$ROOT/Resources/Colon.entitlements")
-fi
 
-if [[ -d "$APP/Contents/Frameworks" ]]; then
-    for framework in "$APP"/Contents/Frameworks/*.framework; do
-        codesign "${SIGN_FLAGS[@]}" "$framework"
+# Sparkle's helpers are signed inside-out with the same identity and hardened runtime, as
+# Sparkle documents (they link system frameworks only): Updater.app and Autoupdate, then
+# the framework. The app's entitlements apply to the app only.
+HELPER_FLAGS=("${SIGN_FLAGS[@]}")
+[[ " ${SIGN_FLAGS[*]} " == *" runtime "* ]] || HELPER_FLAGS+=(--options runtime)
+sign_framework() {
+    local framework="$1" version item
+    version="$(cd "$framework/Versions/Current" && pwd -P)"
+    for item in "$version"/*.app; do
+        codesign "${HELPER_FLAGS[@]}" --preserve-metadata=entitlements,flags "$item"
     done
+    for item in "$version"/*; do
+        if [[ -f "$item" && -x "$item" && ! -L "$item" && "$(basename "$item")" != "$(basename "$framework" .framework)" ]]; then
+            codesign "${HELPER_FLAGS[@]}" --preserve-metadata=entitlements,flags "$item"
+        fi
+    done
+    codesign "${HELPER_FLAGS[@]}" "$framework"
+}
+
+shopt -s nullglob
+for framework in "$APP"/Contents/Frameworks/*.framework; do
+    sign_framework "$framework"
+done
+shopt -u nullglob
+
+APP_SIGN_FLAGS=("${SIGN_FLAGS[@]}")
+if [[ -f "$ROOT/Resources/Colon.entitlements" ]]; then
+    APP_SIGN_FLAGS+=(--entitlements "$ROOT/Resources/Colon.entitlements")
 fi
-codesign "${SIGN_FLAGS[@]}" "$APP"
+codesign "${APP_SIGN_FLAGS[@]}" "$APP"
 
 log "Verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -193,4 +239,8 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 VERSION="$(plutil -extract CFBundleShortVersionString raw "$PLIST")"
 BUILD="$(plutil -extract CFBundleVersion raw "$PLIST")"
 ARCHS="$(lipo -archs "$APP/Contents/MacOS/$APP_NAME")"
+if [[ "${COLON_RELEASE:-}" == 1 ]]; then
+    [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]] || die "release build is not universal ($ARCHS)"
+    [[ "$(plutil -extract SUPublicEDKey raw "$PLIST")" != SPARKLE_PUBLIC_KEY_PLACEHOLDER ]] || die "SUPublicEDKey is still the placeholder"
+fi
 log "Built $APP ($VERSION ($BUILD), $ARCHS, signed by $SIGN_LABEL)"

@@ -4,7 +4,7 @@ Open-source macOS menu-bar emoji picker. Type `:haha` anywhere → a glass picke
 
 - Swift 6 toolchain, Swift 5 language mode, SwiftPM only (no Xcode project). macOS 14+.
 - `swift build`, `swift test`, `scripts/build-app.sh` → `build/Colon.app`.
-- Dependency: `KeyboardShortcuts` (sindresorhus) for the global "open picker" hotkey + recorder UI.
+- Dependencies: `KeyboardShortcuts` (sindresorhus) for the global "open picker" hotkey + recorder UI; `Sparkle` 2 for in-app updates (`App/Updater.swift`). Sparkle stays off unless the bundle is an .app outside `.build` with a real `SUPublicEDKey` (build-app.sh writes it from `SPARKLE_PUBLIC_KEY`); the feed must be EdDSA-signed (`SURequireSignedFeed`) and archives are verified before extraction (`SUVerifyUpdateBeforeExtraction`). Release CI signs with the stable "Colon Release Signing" certificate and publishes `appcast.xml` via `scripts/make-appcast.sh`.
 
 ## Layout & ownership
 

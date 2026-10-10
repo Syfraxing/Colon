@@ -13,6 +13,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private let settings: AppSettings
     private let engine: SuggestionEngine
+    private let updater: Updater
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let menu = NSMenu()
     private let header = MenuHeaderView()
@@ -21,9 +22,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var lastExternalApp: NSRunningApplication?
     private var inputStatus: InputStatus = .running
 
-    init(settings: AppSettings, engine: SuggestionEngine) {
+    init(settings: AppSettings, engine: SuggestionEngine, updater: Updater) {
         self.settings = settings
         self.engine = engine
+        self.updater = updater
         super.init()
 
         menu.delegate = self
@@ -128,10 +130,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+        menu.addItem(updatesItem())
 
         let quit = NSMenuItem(title: "Quit Colon", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
+    }
+
+    /// "Check for Updates…", or "Update to X Available…" while a background check's alert waits.
+    private func updatesItem() -> NSMenuItem {
+        let title = updater.pendingUpdateVersion.map { "Update to \($0) Available…" } ?? "Check for Updates…"
+        let item = NSMenuItem(title: title, action: #selector(checkForUpdates), keyEquivalent: "")
+        item.target = self
+        item.isEnabled = updater.canCheckForUpdates
+        if updater.pendingUpdateVersion != nil {
+            item.image = Self.dot(color: ShellTheme.accentNS)
+        }
+        item.toolTip = updater.unavailableReason
+        return item
     }
 
     private func jevStatusItem() -> NSMenuItem {
@@ -188,6 +204,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func openSettings() {
         onOpenSettings?()
+    }
+
+    @objc private func checkForUpdates() {
+        updater.checkForUpdates()
     }
 
     @objc private func quit() {

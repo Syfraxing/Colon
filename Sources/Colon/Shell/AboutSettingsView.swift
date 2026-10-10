@@ -29,6 +29,8 @@ enum AppInfo {
 }
 
 struct AboutSettingsView: View {
+    @ObservedObject var updater: Updater
+
     private struct Credit: Identifiable {
         let name: String
         let detail: String
@@ -43,6 +45,8 @@ struct AboutSettingsView: View {
                url: URL(string: "https://emojibase.dev")!),
         Credit(name: "KeyboardShortcuts", detail: "Global shortcut recorder by Sindre Sorhus",
                url: URL(string: "https://github.com/sindresorhus/KeyboardShortcuts")!),
+        Credit(name: "Sparkle", detail: "Secure in-app updates",
+               url: URL(string: "https://sparkle-project.org")!),
         Credit(name: "Jev", detail: "Decision model by TypeSafe AI",
                url: URL(string: "https://typesafe.ai")!),
     ]
@@ -73,6 +77,8 @@ struct AboutSettingsView: View {
                 .padding(.vertical, 12)
             }
 
+            UpdatesSection(updater: updater)
+
             Section("Built with") {
                 ForEach(credits) { credit in
                     LabeledContent {
@@ -91,5 +97,54 @@ struct AboutSettingsView: View {
                 Footnote("Colon is open source and free. It keeps no history of what you type; only the emoji you pick are remembered locally to rank favourites first.")
             }
         }
+    }
+}
+
+/// Current version, manual check and the automatic-check switch. Sparkle owns the schedule and
+/// persists the switch itself; this view only reflects it.
+private struct UpdatesSection: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        Section {
+            LabeledContent("Current version") {
+                Text(AppInfo.version)
+                    .font(ShellTheme.mono(12))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Toggle(isOn: Binding(
+                get: { updater.automaticallyChecksForUpdates },
+                set: { updater.automaticallyChecksForUpdates = $0 }
+            )) {
+                Text("Automatically check for updates")
+                Text("Checks once a day in the background.")
+            }
+            .disabled(!updater.isAvailable)
+            LabeledContent {
+                Button("Check for Updates…", action: updater.checkForUpdates)
+                    .disabled(!updater.canCheckForUpdates)
+            } label: {
+                Text("Last checked")
+                Text(lastChecked)
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            if let reason = updater.unavailableReason {
+                Label(reason, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Footnote("Updates come over HTTPS and install only if they carry Colon's EdDSA release signature and a valid code signature.")
+            }
+        }
+    }
+
+    private var lastChecked: String {
+        guard updater.isAvailable else { return "Not available in this build" }
+        guard let date = updater.lastUpdateCheckDate else { return "Never" }
+        return date.formatted(.relative(presentation: .named))
     }
 }

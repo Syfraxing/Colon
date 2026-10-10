@@ -91,16 +91,29 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 Colon lives in the menu bar (there's no Dock icon). Click the menu bar icon for
 Settings, the on/off toggle and Quit. Turn on **Launch at login** in Settings → General.
 
-> **Updating or stuck?** macOS ties the Accessibility permission to the app's signature,
-> and release builds are ad-hoc signed, so after installing a new release Colon may show
-> "Accessibility permission needed" even though the switch looks on. Remove Colon from
-> the Accessibility list (−) and add it again, or reset the permission in Terminal and
-> grant it once more:
-> ```sh
-> tccutil reset Accessibility so.slayer.Colon
-> ```
-> If Colon goes quiet everywhere, check the menu bar: *Paused — secure input* means
-> another app (often a password prompt or a terminal) has turned on macOS Secure Input.
+### Updates
+
+From 0.3.0 on, Colon updates itself. It checks once a day in the background (turn this
+off in **Settings → About**), and **Check for Updates…** in the menu bar menu or in
+Settings → About checks right away. Updates come from this repository's GitHub Releases
+over HTTPS and are installed only if both the feed and the download carry Colon's EdDSA
+release signature.
+
+**Coming from 0.2.x?** Install 0.3.0 manually one last time (download it and replace the
+app in Applications, as above). 0.3.0 switches from ad-hoc signing to a stable release
+certificate, so macOS asks for the permissions once more. Reset the old grants, then
+allow Colon again when onboarding asks:
+```sh
+tccutil reset Accessibility so.slayer.Colon
+tccutil reset ListenEvent so.slayer.Colon
+```
+After that, updates keep the same signature and the permissions stay granted.
+
+> **Stuck?** If Colon shows "Accessibility permission needed" even though the switch looks
+> on, remove Colon from the Accessibility list (−) and add it again, or run the two
+> `tccutil` commands above and grant it once more. If Colon goes quiet everywhere, check
+> the menu bar: *Paused — secure input* means another app (often a password prompt or a
+> terminal) has turned on macOS Secure Input.
 
 ## Jev ranking (bring your own key)
 
@@ -138,8 +151,10 @@ contain:
   300 characters of the text right before the trigger, read from the focused field at that
   moment so suggestions fit the sentence. Never read from password fields.
 
-Nothing is sent when Jev is off or no key is set. Colon has no analytics or telemetry,
-and it never logs your keys, queries or typed text.
+Nothing is sent to Jev when it is off or no key is set. The daily update check fetches
+`appcast.xml` from GitHub Releases (an HTTPS request that reveals only the Colon and macOS
+versions in its user agent, no system profile). Colon has no analytics or telemetry, and it
+never logs your keys, queries or typed text.
 
 ## Build from source
 
@@ -180,9 +195,10 @@ COLON_VERSION=1.2.0 make app    # override the version string
 ```
 
 **Releases.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests,
-builds an ad-hoc signed universal app, and attaches the `.zip`, `.dmg` and
-`SHA256SUMS.txt` to a GitHub Release. CI also scans every commit for anything that looks
-like an API key or token.
+builds a universal app signed with the Colon release certificate, attaches the `.zip`,
+`.dmg` and `SHA256SUMS.txt` to a GitHub Release, and publishes an EdDSA-signed Sparkle
+`appcast.xml` (made by `scripts/make-appcast.sh`) for in-app updates. CI also scans every
+commit for anything that looks like an API key or token.
 
 ## How it works
 
@@ -203,6 +219,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - Colon is released under the [MIT License](LICENSE). © 2026 Hunter Claycomb.
 - [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) by Sindre Sorhus
   (MIT) powers the global hotkey and its recorder.
+- [Sparkle](https://sparkle-project.org) (MIT) delivers in-app updates.
 - Emoji names and keywords come from Unicode emoji data; see
   `scripts/build-emoji-data.py` for the exact sources and their licenses.
 - Ranking by [Jev](https://typesafe.ai) from TypeSafe AI.

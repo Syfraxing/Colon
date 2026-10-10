@@ -6,11 +6,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to (re)build, e.g. v0.1.0
+        description: Existing tag to (re)build, e.g. v0.3.0
         required: true
+      update_feed:
+        description: Also publish appcast.xml (only for re-running the newest release)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -19,41 +26,157 @@ jobs:
     timeout-minutes: 45
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      REPO_URL: https://github.com/${{ github.repository }}
+      FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
+      # SHA-1 of the self-signed "Colon Release Signing" certificate, and the designated
+      # requirement it must produce. Changing either breaks updates and privacy grants.
+      SIGN_IDENTITY: 3956D23DC611E57F528784A3527EC37C960F9B92
+      PINNED_REQUIREMENT: identifier "so.slayer.Colon" and certificate root = H"3956d23dc611e57f528784a3527ec37c960f9b92"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
 
+      - name: Release kind
+        env:
+          EVENT: ${{ github.event_name }}
+          UPDATE_FEED: ${{ inputs.update_feed }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z[-pre]"; exit 1; }
+          PRERELEASE=false; [[ "$TAG" == *-* ]] && PRERELEASE=true
+          # The feed only moves forward: tag pushes of final releases, or an explicit re-run.
+          PUBLISH_FEED=false
+          if [[ "$PRERELEASE" == false ]] && { [[ "$EVENT" == push ]] || [[ "$UPDATE_FEED" == true ]]; }; then
+            PUBLISH_FEED=true
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
+          echo "PUBLISH_FEED=$PUBLISH_FEED" >> "$GITHUB_ENV"
+          echo "version ${TAG#v}, build ${{ github.run_number }}, prerelease $PRERELEASE, publish feed $PUBLISH_FEED"
+
+      - name: Feed must move forward
+        if: env.PUBLISH_FEED == 'true'
+        env:
+          BUILD: ${{ github.run_number }}
+        run: |
+          if ! curl -fsSL --retry 3 -o "$RUNNER_TEMP/current-appcast.xml" "$FEED_URL"; then
+            echo "No published appcast yet; nothing to compare against."
+            exit 0
+          fi
+          read_tag() { xmllint --xpath "string((//*[local-name()='item'])[1]/*[local-name()='$1'])" "$RUNNER_TEMP/current-appcast.xml"; }
+          PUBLISHED_BUILD="$(read_tag version)"
+          PUBLISHED_VERSION="$(read_tag shortVersionString)"
+          echo "published: $PUBLISHED_VERSION ($PUBLISHED_BUILD); new: $VERSION ($BUILD)"
+          [[ "$PUBLISHED_BUILD" =~ ^[0-9]+$ ]] || { echo "::error::published sparkle:version '$PUBLISHED_BUILD' is not an integer"; exit 1; }
+          (( BUILD > PUBLISHED_BUILD )) || { echo "::error::build $BUILD is not newer than published $PUBLISHED_BUILD"; exit 1; }
+          if [[ "$(printf '%s\n%s\n' "$PUBLISHED_VERSION" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+            echo "::error::$VERSION is older than the published $PUBLISHED_VERSION"
+            exit 1
+          fi
+
+      # Everything that runs untrusted-ish build code happens before any secret is touched.
       - name: Test
         run: swift test
 
-      - name: Build Colon.app (universal, ad-hoc signed)
+      - name: Compile (universal)
+        run: swift build -c release --arch arm64 --arch x86_64
+
+      - name: Import signing certificate
         env:
-          SIGN_IDENTITY: "-"
+          P12_BASE64: ${{ secrets.COLON_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.COLON_SIGNING_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/colon-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          P12="$RUNNER_TEMP/colon-signing.p12"
+          (umask 077 && printf '%s' "$P12_BASE64" | base64 --decode > "$P12")
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # Self-signed, so find-identity reports CSSMERR_TP_NOT_TRUSTED; codesign still signs.
+          security find-identity -p codesigning "$KEYCHAIN" | grep -q "$SIGN_IDENTITY" \
+            || { echo "::error::signing identity $SIGN_IDENTITY not in the imported certificate"; exit 1; }
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build Colon.app (universal, release-signed)
+        env:
+          COLON_RELEASE: '1'
           COLON_VERSION: ${{ env.TAG }}
           COLON_BUILD: ${{ github.run_number }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY || secrets.SPARKLE_PUBLIC_KEY }}
         run: scripts/build-app.sh
+
+      - name: Verify signature, architectures and update key
+        run: |
+          APP=build/Colon.app
+          codesign --verify --deep --strict "$APP"
+          REQUIREMENT="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+          [[ "$REQUIREMENT" == "$PINNED_REQUIREMENT" ]] \
+            || { echo "::error::designated requirement is '$REQUIREMENT'"; exit 1; }
+          ARCHS="$(lipo -archs "$APP/Contents/MacOS/Colon")"
+          [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]] \
+            || { echo "::error::not universal: $ARCHS"; exit 1; }
+          [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]] || { echo "::error::Sparkle.framework missing"; exit 1; }
+          KEY="$(plutil -extract SUPublicEDKey raw "$APP/Contents/Info.plist")"
+          [[ "$KEY" != SPARKLE_PUBLIC_KEY_PLACEHOLDER ]] || { echo "::error::SUPublicEDKey is the placeholder"; exit 1; }
+          echo "$REQUIREMENT, $ARCHS"
 
       - name: Package zip and DMG
         run: |
-          VERSION="${TAG#v}"
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent build/Colon.app "dist/Colon-$VERSION.zip"
           scripts/make-dmg.sh
           cd dist && shasum -a 256 Colon-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
+      - name: Delete signing keychain
+        if: always()
+        run: |
+          security list-keychains -d user -s ~/Library/Keychains/login.keychain-db
+          if [[ -n "${KEYCHAIN:-}" && -f "$KEYCHAIN" ]]; then security delete-keychain "$KEYCHAIN"; fi
+          rm -f "$RUNNER_TEMP/colon-signing.p12"
+
+      - name: Generate appcast
+        if: env.PUBLISH_FEED == 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          scripts/make-appcast.sh build/Colon.app "dist/Colon-$VERSION.zip" \
+            "$REPO_URL/releases/download/$TAG/Colon-$VERSION.zip" \
+            "$REPO_URL/releases/tag/$TAG" \
+            "$RUNNER_TEMP/appcast.xml"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --title "Colon ${TAG#v}" --generate-notes \
-              $([[ "$TAG" == *-* ]] && echo --prerelease)
+            # Created as a draft so "latest" never points at a release without its appcast.
+            FLAGS=(--draft --title "Colon $VERSION" --generate-notes)
+            [[ "$PRERELEASE" == true ]] && FLAGS+=(--prerelease)
+            gh release create "$TAG" dist/* "${FLAGS[@]}"
+          fi
+          # The appcast goes up last: clients only see it once the archive is in place.
+          if [[ "$PUBLISH_FEED" == true ]]; then
+            gh release upload "$TAG" "$RUNNER_TEMP/appcast.xml" --clobber
+          fi
+          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" == true ]]; then
+            if [[ "$PUBLISH_FEED" == true ]]; then
+              gh release edit "$TAG" --draft=false --latest
+            else
+              gh release edit "$TAG" --draft=false --latest=false
+            fi
           fi

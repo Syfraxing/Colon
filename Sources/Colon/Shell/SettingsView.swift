@@ -49,6 +49,7 @@ struct SettingsView: View {
     @ObservedObject var jevKey: JevKeyModel
     /// The live engine, for the Jev status line; nil before the coordinator passes it.
     let engine: SuggestionEngine?
+    let updater: Updater
     @StateObject private var launchAtLogin = LaunchAtLogin()
 
     private var tab: SettingsTab { navigation.tab ?? .general }
@@ -87,7 +88,7 @@ struct SettingsView: View {
         case .excludedApps:
             ExcludedAppsSettingsView(settings: settings)
         case .about:
-            AboutSettingsView()
+            AboutSettingsView(updater: updater)
         }
     }
 }

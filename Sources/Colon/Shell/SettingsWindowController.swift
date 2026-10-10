@@ -16,6 +16,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private let settings: AppSettings
     private let engine: SuggestionEngine?
+    private let updater: Updater
     private let navigation = SettingsNavigation()
     private lazy var jevKey = JevKeyModel { [weak self] in self?.onAPIKeyChanged?() }
     private var settingsWindow: NSWindow?
@@ -25,9 +26,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Whether `onAccessibilityGranted` already reflects the current grant.
     private var accessibilityReported = false
 
-    init(settings: AppSettings, engine: SuggestionEngine? = nil) {
+    init(settings: AppSettings, engine: SuggestionEngine? = nil, updater: Updater) {
         self.settings = settings
         self.engine = engine
+        self.updater = updater
         super.init()
     }
 
@@ -136,7 +138,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     // MARK: Windows
 
     private func makeSettingsWindow() -> NSWindow {
-        let hosting = NSHostingController(rootView: SettingsView(settings: settings, navigation: navigation, jevKey: jevKey, engine: engine))
+        let hosting = NSHostingController(rootView: SettingsView(settings: settings, navigation: navigation, jevKey: jevKey, engine: engine, updater: updater))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
