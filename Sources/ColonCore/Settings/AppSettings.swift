@@ -9,6 +9,14 @@ public enum InsertionMethod: String, CaseIterable, Codable, Sendable {
     case paste
 }
 
+/// How the inline picker lays out suggestions.
+public enum PickerLayout: String, CaseIterable, Codable, Sendable {
+    /// Vertical list with shortcodes (default).
+    case list
+    /// One horizontal row of emoji, Rocket-style; ←/→ move the selection.
+    case compact
+}
+
 /// Single source of truth for user preferences, persisted in `UserDefaults`.
 /// The Jev API key is NOT stored here; see `KeychainStore`.
 @MainActor
@@ -27,6 +35,11 @@ public final class AppSettings: ObservableObject {
         public static let skinTone = "skinTone"
         public static let insertionMethod = "insertionMethod"
         public static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        public static let showRecentsOnTrigger = "showRecentsOnTrigger"
+        public static let pickerLayout = "pickerLayout"
+        public static let playsInsertSound = "playsInsertSound"
+        public static let hapticFeedback = "hapticFeedback"
+        public static let gifSearchEnabled = "gifSearchEnabled"
     }
 
     /// Excluded on first launch: apps with their own `:shortcode:` picker, plus terminals, IDEs and
@@ -88,6 +101,16 @@ public final class AppSettings: ObservableObject {
     @Published public var skinTone: SkinTone { didSet { defaults.set(skinTone.rawValue, forKey: Key.skinTone) } }
     @Published public var insertionMethod: InsertionMethod { didSet { defaults.set(insertionMethod.rawValue, forKey: Key.insertionMethod) } }
     @Published public var hasCompletedOnboarding: Bool { didSet { defaults.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding) } }
+    /// Typing the trigger alone shows the most-used emoji (Enter/Tab still pass through until
+    /// the user arrows into the strip, so a plain ":" at the end of a line is never eaten).
+    @Published public var showRecentsOnTrigger: Bool { didSet { defaults.set(showRecentsOnTrigger, forKey: Key.showRecentsOnTrigger) } }
+    @Published public var pickerLayout: PickerLayout { didSet { defaults.set(pickerLayout.rawValue, forKey: Key.pickerLayout) } }
+    /// Soft click when an emoji is inserted.
+    @Published public var playsInsertSound: Bool { didSet { defaults.set(playsInsertSound, forKey: Key.playsInsertSound) } }
+    /// Trackpad haptic tick when the selection moves.
+    @Published public var hapticFeedback: Bool { didSet { defaults.set(hapticFeedback, forKey: Key.hapticFeedback) } }
+    /// `:gif <terms>` opens the GIF picker.
+    @Published public var gifSearchEnabled: Bool { didSet { defaults.set(gifSearchEnabled, forKey: Key.gifSearchEnabled) } }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -103,6 +126,11 @@ public final class AppSettings: ObservableObject {
             Key.skinTone: SkinTone.none.rawValue,
             Key.insertionMethod: InsertionMethod.typing.rawValue,
             Key.hasCompletedOnboarding: false,
+            Key.showRecentsOnTrigger: true,
+            Key.pickerLayout: PickerLayout.list.rawValue,
+            Key.playsInsertSound: false,
+            Key.hapticFeedback: true,
+            Key.gifSearchEnabled: true,
         ])
         isEnabled = defaults.bool(forKey: Key.isEnabled)
         let trigger = defaults.string(forKey: Key.triggerString) ?? ":"
@@ -116,6 +144,11 @@ public final class AppSettings: ObservableObject {
         skinTone = SkinTone(rawValue: defaults.integer(forKey: Key.skinTone)) ?? .none
         insertionMethod = InsertionMethod(rawValue: defaults.string(forKey: Key.insertionMethod) ?? "") ?? .typing
         hasCompletedOnboarding = defaults.bool(forKey: Key.hasCompletedOnboarding)
+        showRecentsOnTrigger = defaults.bool(forKey: Key.showRecentsOnTrigger)
+        pickerLayout = PickerLayout(rawValue: defaults.string(forKey: Key.pickerLayout) ?? "") ?? .list
+        playsInsertSound = defaults.bool(forKey: Key.playsInsertSound)
+        hapticFeedback = defaults.bool(forKey: Key.hapticFeedback)
+        gifSearchEnabled = defaults.bool(forKey: Key.gifSearchEnabled)
     }
 
     public func isExcluded(bundleID: String?) -> Bool {
