@@ -35,12 +35,7 @@ struct GeneralSettingsView: View {
 
             Section("Trigger") {
                 TriggerField(settings: settings)
-                ValueStepper(
-                    title: "Letters before the picker shows",
-                    detail: settings.minQueryLength == 0 ? "Shows as soon as you type the trigger." : nil,
-                    value: $settings.minQueryLength,
-                    range: 0...5
-                )
+                ValueStepper(title: "Letters before the picker shows", value: $settings.minQueryLength, range: 1...5)
                 Toggle(isOn: $settings.autoReplaceOnClosingTrigger) {
                     Text("Replace exact shortcodes when closed")
                     Text(closingExample)
@@ -127,6 +122,7 @@ private struct TriggerField: View {
         if draft.contains(where: { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "+" || $0 == "-" }) {
             return "Use symbols, not letters"
         }
+        if !AppSettings.isValidTrigger(draft) { return "Use plain ASCII symbols" }
         return nil
     }
 
@@ -138,7 +134,6 @@ private struct TriggerField: View {
 
 private struct ValueStepper: View {
     let title: String
-    var detail: String?
     @Binding var value: Int
     let range: ClosedRange<Int>
 
@@ -156,7 +151,6 @@ private struct ValueStepper: View {
             }
         } label: {
             Text(title)
-            if let detail { Text(detail) }
         }
     }
 }

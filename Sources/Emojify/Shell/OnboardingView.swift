@@ -1,5 +1,6 @@
 import AppKit
 import EmojifyCore
+import IOKit.hid
 import SwiftUI
 
 @MainActor
@@ -9,18 +10,21 @@ final class OnboardingModel: ObservableObject {
     }
 
     static let accessibilitySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+    static let inputMonitoringSettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
 
     let steps: [Step]
     @Published var step: Step
     @Published var isTrusted: Bool
+    @Published var hasInputMonitoring: Bool
     @Published var hasRequestedAccess = false
 
     var onFinish: (() -> Void)?
 
-    init(steps: [Step], isTrusted: Bool) {
+    init(steps: [Step], isTrusted: Bool, hasInputMonitoring: Bool) {
         self.steps = steps
         self.step = steps.first ?? .accessibility
         self.isTrusted = isTrusted
+        self.hasInputMonitoring = hasInputMonitoring
     }
 
     var isLastStep: Bool { step == steps.last }
@@ -30,6 +34,13 @@ final class OnboardingModel: ObservableObject {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         if !AXIsProcessTrustedWithOptions(options) {
             NSWorkspace.shared.open(Self.accessibilitySettingsURL)
+        }
+    }
+
+    func requestInputMonitoring() {
+        hasRequestedAccess = true
+        if !IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) {
+            NSWorkspace.shared.open(Self.inputMonitoringSettingsURL)
         }
     }
 
@@ -50,8 +61,8 @@ final class OnboardingModel: ObservableObject {
 struct OnboardingView: View {
     @ObservedObject var model: OnboardingModel
     @ObservedObject var settings: AppSettings
+    @ObservedObject var jevKey: JevKeyModel
     let practiceEngine: SuggestionEngine
-    @StateObject private var jevKey = JevKeyModel()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -113,7 +124,7 @@ struct OnboardingView: View {
 
     private var subtitle: String {
         switch model.step {
-        case .accessibility: "Type \(settings.triggerString)haha in any app and pick 😂 without leaving the keyboard. First, one permission."
+        case .accessibility: "Type \(settings.triggerString)haha in any app and pick 😂 without leaving the keyboard. First, two quick permissions."
         case .jev: "Optional. A Jev API key lets Emojify understand what you mean, not just what you type."
         case .practice: "Type \(settings.triggerString)haha below, then press ⏎ or ⇥. It works the same in every app."
         }
@@ -165,43 +176,46 @@ struct OnboardingView: View {
     // MARK: Steps
 
     private var accessibilityStep: some View {
-        VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 PermissionPoint(symbol: "keyboard", text: "Notices \(settings.triggerString)shortcodes as you type and shows the picker at your cursor.")
                 PermissionPoint(symbol: "text.cursor", text: "Replaces \(settings.triggerString)haha with the emoji you choose.")
                 PermissionPoint(symbol: "lock.shield", text: "Keeps no record of your typing and stays silent in password fields.")
             }
-            .padding(16)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassCard()
 
-            if model.isTrusted {
-                Label("Accessibility access granted", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ShellTheme.success)
-                    .padding(.top, 6)
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
-            } else {
-                VStack(spacing: 8) {
-                    Button(action: model.requestAccess) {
-                        Label("Open Accessibility Settings", systemImage: "hand.raised.fill")
-                            .padding(.horizontal, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    if model.hasRequestedAccess {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Turn on Emojify in the list. This updates automatically.")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
+            VStack(spacing: 0) {
+                PermissionRow(
+                    title: "Accessibility",
+                    detail: "Required: see the trigger and insert emoji.",
+                    isGranted: model.isTrusted,
+                    action: model.requestAccess
+                )
+                Divider().padding(.leading, 44).opacity(0.6)
+                PermissionRow(
+                    title: "Input Monitoring",
+                    detail: "Lets macOS deliver your keystrokes to Emojify.",
+                    isGranted: model.hasInputMonitoring,
+                    action: model.requestInputMonitoring
+                )
+            }
+            .padding(.vertical, 4)
+            .glassCard()
+
+            if model.hasRequestedAccess, !(model.isTrusted && model.hasInputMonitoring) {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Turn on Emojify in System Settings. This updates automatically.")
                 }
-                .padding(.top, 6)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .transition(.opacity)
             }
         }
         .animation(ShellTheme.ease, value: model.isTrusted)
+        .animation(ShellTheme.ease, value: model.hasInputMonitoring)
     }
 
     private var jevStep: some View {
@@ -220,6 +234,39 @@ struct OnboardingView: View {
 
     private var practiceStep: some View {
         PracticeField(settings: settings, engine: practiceEngine)
+    }
+}
+
+private struct PermissionRow: View {
+    let title: String
+    let detail: String
+    let isGranted: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isGranted ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(isGranted ? ShellTheme.success : Color.secondary)
+                .frame(width: 20)
+                .contentTransition(.symbolEffect(.replace))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isGranted {
+                Text("Granted")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(ShellTheme.success)
+            } else {
+                Button("Allow…", action: action)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .accessibilityElement(children: .combine)
     }
 }
 

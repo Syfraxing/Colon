@@ -46,7 +46,9 @@ final class SettingsNavigation: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var navigation: SettingsNavigation
-    @StateObject private var jevKey = JevKeyModel()
+    @ObservedObject var jevKey: JevKeyModel
+    /// The live engine, for the Jev status line; nil before the coordinator passes it.
+    let engine: SuggestionEngine?
     @StateObject private var launchAtLogin = LaunchAtLogin()
 
     private var tab: SettingsTab { navigation.tab ?? .general }
@@ -79,7 +81,7 @@ struct SettingsView: View {
         case .general:
             GeneralSettingsView(settings: settings, launchAtLogin: launchAtLogin)
         case .jev:
-            JevSettingsView(settings: settings, key: jevKey)
+            JevSettingsView(settings: settings, key: jevKey, engine: engine)
         case .shortcuts:
             ShortcutsSettingsView(settings: settings)
         case .excludedApps:

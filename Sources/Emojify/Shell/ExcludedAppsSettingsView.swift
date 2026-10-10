@@ -35,6 +35,18 @@ struct AppIdentity: Identifiable, Hashable {
         "com.linear": "Linear",
         "notion.id": "Notion",
         "com.github.GitHubClient": "GitHub Desktop",
+        "com.apple.Terminal": "Terminal",
+        "com.googlecode.iterm2": "iTerm",
+        "com.mitchellh.ghostty": "Ghostty",
+        "dev.warp.Warp-Stable": "Warp",
+        "com.microsoft.VSCode": "Visual Studio Code",
+        "com.apple.dt.Xcode": "Xcode",
+        "dev.zed.Zed": "Zed",
+        "com.todesktop.230313mzl4w4u92": "Cursor",
+        "com.1password.1password": "1Password",
+        "com.bitwarden.desktop": "Bitwarden",
+        "com.apple.keychainaccess": "Keychain Access",
+        "com.apple.Passwords": "Passwords",
     ]
 
     static func displayName(at url: URL) -> String {
@@ -52,36 +64,15 @@ struct ExcludedAppsSettingsView: View {
     private var apps: [AppIdentity] {
         settings.excludedBundleIDs
             .map(AppIdentity.init(bundleID:))
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .sorted {
+                // Installed apps first, then alphabetical.
+                if $0.isInstalled != $1.isInstalled { return $0.isInstalled }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
     }
 
     var body: some View {
         SettingsPage {
-            Section {
-                if settings.excludedBundleIDs.isEmpty {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 6) {
-                            Image(systemName: "checkmark.seal")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.tertiary)
-                            Text("Emojify works in every app.")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 18)
-                        Spacer()
-                    }
-                } else {
-                    ForEach(apps) { app in
-                        AppRow(app: app) { remove(app.bundleID) }
-                    }
-                }
-            } header: {
-                Text("Emojify stays silent in these apps")
-            } footer: {
-                Footnote("Apps with their own :shortcode: picker, like Slack and Discord, are excluded by default so the two don’t fight.")
-            }
-
             Section {
                 HStack {
                     Menu {
@@ -114,6 +105,30 @@ struct ExcludedAppsSettingsView: View {
                     }
                     .disabled(settings.excludedBundleIDs == AppSettings.defaultExcludedBundleIDs)
                 }
+            }
+            Section {
+                if settings.excludedBundleIDs.isEmpty {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 6) {
+                            Image(systemName: "checkmark.seal")
+                                .font(.system(size: 22))
+                                .foregroundStyle(.tertiary)
+                            Text("Emojify works in every app.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 18)
+                        Spacer()
+                    }
+                } else {
+                    ForEach(apps) { app in
+                        AppRow(app: app) { remove(app.bundleID) }
+                    }
+                }
+            } header: {
+                Text("Emojify stays silent in these apps")
+            } footer: {
+                Footnote("Excluded by default: apps with their own :shortcode: picker (Slack, Discord), terminals and code editors where : is everyday syntax, and password managers.")
             }
         }
     }

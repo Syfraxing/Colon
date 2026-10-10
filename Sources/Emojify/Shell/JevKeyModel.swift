@@ -28,9 +28,14 @@ final class JevKeyModel: ObservableObject {
     @Published private(set) var testState: TestState = .idle
     @Published private(set) var saveError: String?
 
-    private var testTask: Task<Void, Never>?
+    /// Called after the saved key changes, so the engine can reload it.
+    var onKeyChanged: (() -> Void)?
 
-    init() {
+    private var testTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
+
+    init(onKeyChanged: (() -> Void)? = nil) {
+        self.onKeyChanged = onKeyChanged
         refresh()
     }
 
@@ -40,15 +45,26 @@ final class JevKeyModel: ObservableObject {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func refresh() {
-        let environment = ProcessInfo.processInfo.environment["JEV_API_KEY"].map { !$0.isEmpty } ?? false
-        if let key = KeychainStore.jevAPIKey {
-            maskedKey = Self.mask(key)
-            source = environment ? .environment : .keychain
-        } else {
-            maskedKey = nil
-            source = .none
+    /// Re-reads the key off the main thread (a Keychain read can block on an access prompt).
+    func refresh(then completion: (() -> Void)? = nil) {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            let masked = await Task.detached(priority: .userInitiated) {
+                KeychainStore.jevAPIKey.map(JevKeyModel.mask)
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            maskedKey = masked
+            source = masked == nil ? .none : (Self.environmentKeyPresent ? .environment : .keychain)
+            completion?()
         }
+    }
+
+    private static var environmentKeyPresent: Bool {
+        #if DEBUG
+        return !(ProcessInfo.processInfo.environment["JEV_API_KEY"] ?? "").isEmpty
+        #else
+        return false
+        #endif
     }
 
     func save() {
@@ -56,8 +72,8 @@ final class JevKeyModel: ObservableObject {
         if KeychainStore.setJevAPIKey(draft) {
             draft = ""
             saveError = nil
-            refresh()
-            test()
+            onKeyChanged?()
+            refresh { [weak self] in self?.test() }
         } else {
             saveError = "Couldn’t save the key to the Keychain."
         }
@@ -65,20 +81,21 @@ final class JevKeyModel: ObservableObject {
 
     func remove() {
         testTask?.cancel()
-        KeychainStore.setJevAPIKey(nil)
+        saveError = KeychainStore.setJevAPIKey(nil) ? nil : "Couldn’t remove the key from the Keychain."
         testState = .idle
-        saveError = nil
+        onKeyChanged?()
         refresh()
     }
 
     func test() {
         testTask?.cancel()
-        guard let key = KeychainStore.jevAPIKey else {
-            testState = .failure("Add an API key first.")
-            return
-        }
         testState = .testing
         testTask = Task { [weak self] in
+            let key = await Task.detached(priority: .userInitiated) { KeychainStore.jevAPIKey }.value
+            guard let key else {
+                self?.testState = .failure("Add an API key first.")
+                return
+            }
             let result: TestState
             do {
                 let latency = try await JevClient(apiKey: key).ping()
@@ -98,12 +115,12 @@ final class JevKeyModel: ObservableObject {
     }
 
     /// `••••••••3f9a`: enough to recognise which key is saved, never enough to reuse it.
-    static func mask(_ key: String) -> String {
+    nonisolated static func mask(_ key: String) -> String {
         let tail = key.count > 12 ? String(key.suffix(4)) : ""
         return String(repeating: "•", count: 8) + tail
     }
 
-    static func milliseconds(_ duration: Duration) -> Int {
+    nonisolated static func milliseconds(_ duration: Duration) -> Int {
         let (seconds, attoseconds) = duration.components
         return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
     }
@@ -112,14 +129,14 @@ final class JevKeyModel: ObservableObject {
         switch error {
         case JevError.missingKey: "No API key."
         case JevError.unauthorized: "Key rejected (401). Check it in the TypeSafe console."
-        case JevError.validation(let message): "Request rejected: \(message)"
+        case JevError.validation: "Jev rejected the test request."
         case JevError.rateLimited: "Rate limited. Try again in a moment."
         case JevError.overloaded: "Jev is overloaded right now. Try again shortly."
         case JevError.http(let code): "Server error (HTTP \(code))."
         case JevError.decoding: "Unexpected response from Jev."
         case let urlError as URLError where urlError.code == .timedOut: "Timed out."
         case let urlError as URLError where urlError.code == .notConnectedToInternet: "You’re offline."
-        default: error.localizedDescription
+        default: "Couldn’t reach Jev."
         }
     }
 }

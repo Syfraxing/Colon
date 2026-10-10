@@ -4,6 +4,7 @@ import SwiftUI
 struct JevSettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var key: JevKeyModel
+    let engine: SuggestionEngine?
 
     var body: some View {
         SettingsPage {
@@ -25,6 +26,9 @@ struct JevSettingsView: View {
 
             Section("API key") {
                 JevKeyEditor(model: key)
+                if let engine, key.hasKey {
+                    EngineStatusRow(engine: engine)
+                }
             }
 
             Section {
@@ -48,6 +52,24 @@ struct JevSettingsView: View {
                 Text("Privacy")
             }
         }
-        .onAppear(perform: key.refresh)
+        .onAppear { key.refresh() }
+    }
+}
+
+/// What the running engine last saw from Jev (live, unlike the one-off Test).
+private struct EngineStatusRow: View {
+    @ObservedObject var engine: SuggestionEngine
+
+    var body: some View {
+        LabeledContent("Last request") {
+            switch engine.jevStatus {
+            case .disabled: Text("Jev is off").foregroundStyle(.secondary)
+            case .noKey: Text("No key loaded").foregroundStyle(.secondary)
+            case .idle: Text("Ready").foregroundStyle(.secondary)
+            case .ok(let ms): Text("Connected · \(ms) ms").foregroundStyle(ShellTheme.success)
+            case .error(let message): Text(message).foregroundStyle(ShellTheme.warning).lineLimit(1)
+            }
+        }
+        .font(.callout)
     }
 }

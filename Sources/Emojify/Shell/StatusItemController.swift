@@ -19,18 +19,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var cancellables = Set<AnyCancellable>()
     /// Last app other than Emojify that was frontmost: the target of "Pause for …".
     private var lastExternalApp: NSRunningApplication?
+    private var inputStatus: InputStatus = .running
 
     init(settings: AppSettings, engine: SuggestionEngine) {
         self.settings = settings
         self.engine = engine
         super.init()
 
-        if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "face.smiling", accessibilityDescription: "Emojify")
-            image?.isTemplate = true
-            button.image = image?.withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
-            button.toolTip = "Emojify"
-        }
         menu.delegate = self
         menu.autoenablesItems = false
         statusItem.menu = menu
@@ -50,10 +45,35 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             .store(in: &cancellables)
     }
 
+    /// Reflects what the input layer is doing (permission missing, secure input, …).
+    func update(inputStatus: InputStatus) {
+        self.inputStatus = inputStatus
+        applyEnabled(settings.isEnabled)
+    }
+
     private func applyEnabled(_ isEnabled: Bool) {
-        statusItem.button?.appearsDisabled = !isEnabled
-        statusItem.button?.toolTip = isEnabled ? "Emojify" : "Emojify (off)"
+        guard let button = statusItem.button else { return }
+        let symbol = switch inputStatus {
+        case .noPermission: "exclamationmark.triangle"
+        case .secureInput: "lock"
+        case .running, .disabled: "face.smiling"
+        }
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Emojify")?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
+        image?.isTemplate = true
+        button.image = image
+        button.appearsDisabled = !isEnabled || inputStatus != .running
+        button.toolTip = isEnabled ? (statusMessage ?? "Emojify") : "Emojify (off)"
         header.isOn = isEnabled
+    }
+
+    /// Why Emojify isn't listening right now, if it isn't (and the user hasn't just turned it off).
+    private var statusMessage: String? {
+        switch inputStatus {
+        case .running, .disabled: nil
+        case .noPermission: "Accessibility permission needed"
+        case .secureInput: "Paused: another app turned on Secure Input"
+        }
     }
 
     private static func externalFrontmost() -> NSRunningApplication? {
@@ -70,6 +90,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let headerItem = NSMenuItem()
         headerItem.view = header
         menu.addItem(headerItem)
+        if settings.isEnabled, let message = statusMessage {
+            let item = NSMenuItem(title: message, action: nil, keyEquivalent: "")
+            if inputStatus == .noPermission {
+                item.action = #selector(openSettings)
+                item.target = self
+            }
+            item.isEnabled = item.action != nil
+            item.image = symbol(inputStatus == .secureInput ? "lock.fill" : "exclamationmark.triangle.fill")
+            item.toolTip = inputStatus == .secureInput
+                ? "macOS hides keystrokes from every app while Secure Input is on (password fields, some terminals). Emojify resumes automatically."
+                : "Open setup to grant Accessibility access."
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
 
         let openPicker = NSMenuItem(title: "Open Picker", action: #selector(openPicker), keyEquivalent: "")

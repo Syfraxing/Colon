@@ -267,7 +267,7 @@ final class PracticeNSTextView: NSTextView {
         guard string.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.monospacedSystemFont(ofSize: 15, weight: .regular),
-            .foregroundColor: NSColor.placeholderTextColor,
+            .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.6),
         ]
         placeholder.draw(at: NSPoint(x: 0, y: textContainerInset.height), withAttributes: attributes)
     }
