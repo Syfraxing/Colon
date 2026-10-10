@@ -89,19 +89,18 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     private func handleMousePick(_ emoji: Emoji) {
         let text = engine.output(for: emoji)
         engine.recordUse(emoji)
+        // Take the search target before hiding, so nothing the hide triggers (resign key) can clear it.
+        let searchTarget = searchTargetApp
+        searchTargetApp = nil
         picker.hide()
-        if let target = searchTargetApp {
-            searchTargetApp = nil
+        if let target = searchTarget {
             if target.processIdentifier == ProcessInfo.processInfo.processIdentifier {
                 // Searching from our own Settings window: there is no other app to type into.
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
             } else {
-                // The search panel never activates Emojify, so the target app is still frontmost;
-                // give key focus a beat to return from the panel before typing.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [settings] in
-                    Inserter.replace(deleteCount: 0, with: text, method: settings.insertionMethod)
-                }
+                // The panel is ordered out by now, so typing reaches the target app.
+                Inserter.replace(deleteCount: 0, with: text, method: settings.insertionMethod)
             }
         } else {
             input.commitFromMouse(text)

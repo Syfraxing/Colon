@@ -142,8 +142,10 @@ final class PickerPanelController {
         anchorCaret = nil
         anchorIsFallback = false
         panel.allowsKey = false
-        retract(animated: true)
-        // The search text stays during the fade; `beginSearch` clears it on the next open.
+        // A key panel (search mode) holds the keyboard until it leaves the screen, so a fade would
+        // swallow whatever is typed for the target app meanwhile: take it off at once.
+        retract(animated: !panel.isKeyWindow)
+        // The search text stays; `beginSearch` clears it on the next open.
         searchContext = PredictionContext()
     }
 
@@ -218,7 +220,7 @@ final class PickerPanelController {
         withAnimation(.pickerEase(0.15)) { model.isPresented = true }
     }
 
-    /// Takes the panel off screen: a 100 ms fade, or at once (empty list, mode switch, reduce motion).
+    /// Takes the panel off screen: a 100 ms fade, or at once (key panel, empty list, mode switch, reduce motion).
     private func retract(animated: Bool) {
         guard isOnScreen else { return }
         isOnScreen = false
