@@ -120,7 +120,7 @@ Ownership: **input** = `ColonCore/Input`, `ColonCore/Ranking` (recents), `Colon/
 - Keep-open insert: `inputCommitSelectionKeepOpen() -> String?` neither hides nor ends the capture; if it returns nil, swallow the ⌘↩ (never re-post it; it would send messages).
 - `configureEngine` syncs trigger, minimum, auto replace, `showsRecentsOnTrigger` and `horizontalLayout`, and resets the capture on any change.
 - Coordinator edits: each worker adds an `// MARK: v0.4 <worker>` block at the end of AppCoordinator and keeps edits inside existing methods to one line. `Feedback.inserted` is called by the coordinator in every insert path (Enter/Tab, keep-open, shortcode, mouse, search); several of those run inside the tap callback, so it only queues the click (`DispatchQueue.main.async`). The click voices are built when `playsInsertSound` is on (at launch and when it is turned on), never inside the callback. Haptics only on real selection index changes.
-- PracticeField belongs to input (handles keep-open).
+- PracticeField belongs to input (handles keep-open). Its logic is `ColonCore/Input/PracticeController` (unit tested); the AppKit text view only performs the replacements it asks for. Like `InputController`, it treats `.hide` as "hide the list" and never resets the engine for it: below the minimum query length the capture goes on, so the recents strip that opens on `:` closing on the first letter must not end `:haha`.
 
 ## Snippets
 

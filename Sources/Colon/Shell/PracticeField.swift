@@ -2,119 +2,6 @@ import AppKit
 import ColonCore
 import SwiftUI
 
-/// Drives the onboarding practice field with the real `TriggerEngine` and a dedicated
-/// `SuggestionEngine`, mirroring what `InputController` does in other apps. (The global
-/// input layer stays silent while Colon itself is frontmost, so the field runs its own copy.)
-@MainActor
-final class PracticeController: ObservableObject {
-    @Published private(set) var isShowing = false
-    @Published private(set) var selectedIndex = 0
-    @Published private(set) var lastInserted: String?
-
-    let engine: SuggestionEngine
-    private let settings: AppSettings
-    private var trigger: TriggerEngine
-
-    init(settings: AppSettings, engine: SuggestionEngine) {
-        self.settings = settings
-        self.engine = engine
-        let store = EmojiStore.shared
-        trigger = TriggerEngine(
-            trigger: settings.triggerString,
-            minQueryLength: settings.minQueryLength,
-            autoReplaceOnClosingTrigger: settings.autoReplaceOnClosingTrigger,
-            showsRecentsOnTrigger: settings.showRecentsOnTrigger,
-            shortcodeExists: { store.emoji(forShortcode: $0) != nil }
-        )
-    }
-
-    var visibleSuggestions: [Suggestion] {
-        Array(engine.suggestions.prefix(settings.maxResults))
-    }
-
-    /// Returns true when the key was consumed (must not reach the text view).
-    func handle(_ input: KeyInput, in textView: NSTextView) -> Bool {
-        trigger.trigger = settings.triggerString
-        trigger.minQueryLength = settings.minQueryLength
-        trigger.autoReplaceOnClosingTrigger = settings.autoReplaceOnClosingTrigger
-        trigger.showsRecentsOnTrigger = settings.showRecentsOnTrigger
-        // The practice list is always vertical.
-        trigger.horizontalLayout = false
-
-        let result = trigger.handle(input, pickerVisible: isShowing && !visibleSuggestions.isEmpty)
-        switch result.action {
-        case .none:
-            break
-        case .show(let query):
-            if !isShowing { selectedIndex = 0 }
-            let context = PredictionContext(appName: "Colon", bundleID: Bundle.main.bundleIdentifier)
-            engine.update(query: query, context: context)
-            isShowing = true
-        case .hide:
-            hide()
-        case .moveSelection(let delta):
-            let count = visibleSuggestions.count
-            if count > 0 {
-                selectedIndex = (selectedIndex + delta + count) % count
-            }
-        case .commitSelection(let deleteCount):
-            let suggestions = visibleSuggestions
-            if suggestions.indices.contains(selectedIndex) {
-                insert(engine.output(for: suggestions[selectedIndex].item), replacing: deleteCount, in: textView)
-            }
-            hide()
-        case .commitSelectionKeepOpen(let deleteCount):
-            let suggestions = visibleSuggestions
-            if suggestions.indices.contains(selectedIndex) {
-                insert(engine.output(for: suggestions[selectedIndex].item), replacing: deleteCount, in: textView)
-            } else {
-                trigger.keepOpenInsertFailed()
-            }
-        case .commitShortcode(let shortcode, let deleteCount):
-            if let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) {
-                insert(engine.output(for: emoji), replacing: deleteCount, in: textView)
-            }
-            hide()
-        }
-        return result.swallow
-    }
-
-    func select(_ suggestion: Suggestion, in textView: NSTextView) {
-        let deleteCount = trigger.typedLength ?? 0
-        insert(engine.output(for: suggestion.item), replacing: deleteCount, in: textView)
-        hide()
-    }
-
-    func interrupt() {
-        hide()
-    }
-
-    private func hide() {
-        trigger.reset()
-        engine.reset()
-        isShowing = false
-        selectedIndex = 0
-    }
-
-    /// Deletes `count` characters before the caret and inserts `text`, like `Inserter.replace`.
-    private func insert(_ text: String, replacing count: Int, in textView: NSTextView) {
-        let string = textView.string as NSString
-        let caret = textView.selectedRange().location
-        var start = caret
-        var removed = 0
-        while removed < count, start > 0 {
-            start = string.rangeOfComposedCharacterSequence(at: start - 1).location
-            removed += 1
-        }
-        let range = NSRange(location: start, length: caret - start)
-        if textView.shouldChangeText(in: range, replacementString: text) {
-            textView.replaceCharacters(in: range, with: text)
-            textView.didChangeText()
-        }
-        lastInserted = text
-    }
-}
-
 struct PracticeField: View {
     @ObservedObject var settings: AppSettings
     @StateObject private var controller: PracticeController
@@ -266,7 +153,7 @@ final class PracticeNSTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         guard let controller else { return super.keyDown(with: event) }
-        if !controller.handle(Self.keyInput(for: event), in: self) {
+        if !controller.handle(Self.keyInput(for: event), replace: replaceBeforeCaret) {
             super.keyDown(with: event)
         }
     }
@@ -274,10 +161,27 @@ final class PracticeNSTextView: NSTextView {
     /// ⌘↩ arrives as a key equivalent; route it to the picker (multi-insert) while it is open.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if let controller, window?.firstResponder === self, Self.keyInput(for: event) == .commandEnter,
-           controller.handle(.commandEnter, in: self) {
+           controller.handle(.commandEnter, replace: replaceBeforeCaret) {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Deletes `count` characters before the caret and inserts `text`, like `Inserter.replace`.
+    private func replaceBeforeCaret(_ count: Int, _ text: String) {
+        let string = self.string as NSString
+        let caret = selectedRange().location
+        var start = caret
+        var removed = 0
+        while removed < count, start > 0 {
+            start = string.rangeOfComposedCharacterSequence(at: start - 1).location
+            removed += 1
+        }
+        let range = NSRange(location: start, length: caret - start)
+        if shouldChangeText(in: range, replacementString: text) {
+            replaceCharacters(in: range, with: text)
+            didChangeText()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {

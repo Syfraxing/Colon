@@ -33,6 +33,21 @@ ad-hoc signature you have to re-grant Accessibility after every rebuild
 - No new dependencies without discussing it in an issue first.
 - Swift 5 language mode, standard Swift API design guidelines, small focused commits.
 
+## Testing typing end to end
+
+Scripted typing is not always what a keyboard sends. Run `COLON_DEBUG=1` and read the
+`so.slayer.Colon` log before calling a missing picker a bug.
+
+- AppleScript `tell application "System Events" to keystroke ":ema"` posts ⇧ and `;`
+  microseconds apart. The tap can then read the `;` without ⇧ (and the next letters with ⇧),
+  so `:` arrives as `;`. A real keyboard does not do this, and neither does a VNC client
+  typing through the VM's virtual keyboard. `cua do type` attaches the text to each event, so
+  it is safe too.
+- Colon keeps only one bit about the character before the caret. A new document created by a
+  script (`make new document`) gets no click, ⌘ shortcut or app switch, so that bit still
+  describes the previous document. If the previous text ended in a letter, the next `:` counts
+  as mid-word. Open documents with ⌘N, or end each check with Return, a space or a click.
+
 ## Pull requests
 
 1. Fork and branch from `main`.
