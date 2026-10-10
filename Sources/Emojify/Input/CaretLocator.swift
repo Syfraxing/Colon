@@ -218,10 +218,11 @@ enum AXReader {
     }
 }
 
-/// Electron and Chromium build their accessibility tree only for assistive clients. When the
-/// focused-element read comes back empty, ask once per process: `AXManualAccessibility` (Electron)
-/// and, for Chromium browsers only, `AXEnhancedUserInterface` (it disturbs window animations and
-/// window managers elsewhere). Native apps never reach this.
+/// Electron and Chromium build their accessibility tree only for assistive clients, and building it
+/// takes seconds. Known Chromium browsers and Electron apps are asked as soon as they activate, so
+/// the tree is usually ready by the first trigger; any other app is asked once its focused-element
+/// read comes back empty. `AXManualAccessibility` (Electron) and, for Chromium browsers only,
+/// `AXEnhancedUserInterface` (it disturbs window animations and window managers elsewhere).
 final class AccessibilityUnlocker: @unchecked Sendable {
     static let shared = AccessibilityUnlocker()
 
@@ -234,6 +235,12 @@ final class AccessibilityUnlocker: @unchecked Sendable {
     private let lock = NSLock()
     private var unlocked: Set<pid_t> = []
 
+    /// Unlocks an app that just activated if it is a known Chromium browser or an Electron app.
+    func prepare(pid: pid_t, bundleID: String?, bundleURL: URL?) {
+        guard Self.isChromiumBrowser(bundleID) || Self.isElectron(bundleURL) else { return }
+        unlockIfNeeded(pid: pid, bundleID: bundleID)
+    }
+
     func unlockIfNeeded(pid: pid_t, bundleID: String?) {
         lock.lock()
         let isNew = unlocked.insert(pid).inserted
@@ -241,11 +248,28 @@ final class AccessibilityUnlocker: @unchecked Sendable {
         guard isNew else { return }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, AXReader.messagingTimeout)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        if let bundleID, Self.chromiumBrowsers.contains(bundleID) {
-            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        var results = [AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)]
+        if Self.isChromiumBrowser(bundleID) {
+            results.append(AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue))
+        }
+        if results.contains(.cannotComplete) {
+            // Still launching, or busy past the messaging timeout: ask again next time.
+            lock.lock()
+            unlocked.remove(pid)
+            lock.unlock()
+            return
         }
         InputLog.debug("enabled accessibility tree for pid \(pid)")
+    }
+
+    private static func isChromiumBrowser(_ bundleID: String?) -> Bool {
+        bundleID.map(chromiumBrowsers.contains) ?? false
+    }
+
+    private static func isElectron(_ bundleURL: URL?) -> Bool {
+        guard let bundleURL else { return false }
+        let framework = bundleURL.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: framework.path)
     }
 
     /// Forget terminated processes so a recycled pid gets unlocked again.

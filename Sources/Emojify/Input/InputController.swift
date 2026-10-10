@@ -79,9 +79,10 @@ final class InputController: ObservableObject {
     private var idleWork: DispatchWorkItem?
 
     private let axQueue = DispatchQueue(label: "Emojify.input.ax", qos: .userInteractive)
-    /// Delays before re-probing when the focused element could not be read (Chromium/Electron
-    /// build their tree asynchronously once asked).
-    private static let probeRetryDelays: [TimeInterval] = [0.15, 0.4]
+    /// Delays before re-probing when the focused element could not be read: Chromium/Electron build
+    /// their tree asynchronously once asked, which takes seconds after a fresh launch. About 4 s in
+    /// all; keys are never swallowed meanwhile because the picker is not shown.
+    private static let probeRetryDelays: [TimeInterval] = [0.15, 0.25, 0.35, 0.5, 0.75, 1, 1]
     /// A capture with no keystroke for this long is abandoned.
     private static let idleTimeout: TimeInterval = 10
     private static let healthInterval: TimeInterval = 2
@@ -168,6 +169,7 @@ final class InputController: ObservableObject {
         tapSource = source
         isRunning = true
         InputLog.debug("tap installed")
+        prepareAccessibility(for: frontmostApp)
         return true
     }
 
@@ -511,6 +513,7 @@ final class InputController: ObservableObject {
             MainActor.assumeIsolated {
                 self?.frontmostApp = app ?? NSWorkspace.shared.frontmostApplication
                 self?.resetCapture()
+                self?.prepareAccessibility(for: app)
             }
         })
         observers.append(workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -557,6 +560,18 @@ final class InputController: ObservableObject {
                 self.resetCapture()
             }
             .store(in: &cancellables)
+    }
+
+    /// Starts building a Chromium/Electron app's accessibility tree as soon as it comes forward, so
+    /// it is ready by the first trigger. Only while the tap runs (enabled and trusted).
+    private func prepareAccessibility(for app: NSRunningApplication?) {
+        guard tap != nil, let app, !settings.isExcluded(bundleID: app.bundleIdentifier) else { return }
+        let pid = app.processIdentifier
+        let bundleID = app.bundleIdentifier
+        let bundleURL = app.bundleURL
+        axQueue.async {
+            AccessibilityUnlocker.shared.prepare(pid: pid, bundleID: bundleID, bundleURL: bundleURL)
+        }
     }
 
     private func configureEngine(trigger: String, minQueryLength: Int, autoReplace: Bool) {
