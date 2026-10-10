@@ -212,7 +212,7 @@ private final class MenuHeaderView: NSView {
     private let toggle = NSSwitch()
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 34))
+        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 44))
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
@@ -224,7 +224,7 @@ private final class MenuHeaderView: NSView {
         let labels = NSStackView(views: [title, subtitle])
         labels.orientation = .vertical
         labels.alignment = .leading
-        labels.spacing = 0
+        labels.spacing = 1
 
         let row = NSStackView(views: [labels, NSView(), toggle])
         row.orientation = .horizontal
@@ -234,8 +234,9 @@ private final class MenuHeaderView: NSView {
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            heightAnchor.constraint(equalToConstant: 44),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
         ])
     }

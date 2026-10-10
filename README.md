@@ -82,9 +82,10 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
      ```sh
      xattr -dr com.apple.quarantine /Applications/Emojify.app
      ```
-4. **Grant Accessibility.** Emojify needs it to see your keystrokes and type the emoji.
-   The onboarding window takes you to **System Settings → Privacy & Security →
-   Accessibility**; switch Emojify on and it starts working immediately. Install the app in
+4. **Grant Accessibility (and Input Monitoring if asked).** Emojify needs them to see your
+   keystrokes and type the emoji. The onboarding window takes you to **System Settings →
+   Privacy & Security → Accessibility** (and **Input Monitoring** on macOS versions that
+   require it); switch Emojify on and it starts working immediately. Install the app in
    Applications *before* granting, and don't move it afterwards.
 
 Emojify lives in the menu bar (there's no Dock icon). Click the menu bar icon for
