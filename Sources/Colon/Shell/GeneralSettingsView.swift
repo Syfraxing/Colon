@@ -43,11 +43,43 @@ struct GeneralSettingsView: View {
             }
 
             Section("Picker") {
+                Picker(selection: $settings.pickerLayout) {
+                    Text("List").tag(PickerLayout.list)
+                    Text("Compact").tag(PickerLayout.compact)
+                } label: {
+                    Text("Layout")
+                    Text(settings.pickerLayout == .list
+                        ? "Emoji with their shortcodes, one per row."
+                        : "One row of emoji; ← → choose, the shortcode shows underneath.")
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Toggle(isOn: $settings.showRecentsOnTrigger) {
+                    Text("Show recent emoji on trigger")
+                    Text("Typing \(settings.triggerString) alone shows your most-used emoji. ↩ still types a newline until you arrow into them.")
+                }
                 ValueStepper(title: "Suggestions shown", value: $settings.maxResults, range: 3...12)
                 HStack {
                     Text("Skin tone")
                     Spacer()
                     SkinTonePicker(selection: $settings.skinTone)
+                }
+            }
+
+            Section("Feedback") {
+                Toggle(isOn: $settings.playsInsertSound) {
+                    Text("Sound on insert")
+                    Text("A soft, quiet click each time an emoji goes in.")
+                }
+                .onChange(of: settings.playsInsertSound) { _, isOn in
+                    if isOn { Feedback.previewClick() }
+                }
+                Toggle(isOn: $settings.hapticFeedback) {
+                    Text("Haptic feedback")
+                    Text("A light tick on the trackpad as the highlight moves.")
+                }
+                .onChange(of: settings.hapticFeedback) { _, isOn in
+                    if isOn { Feedback.previewHaptic() }
                 }
             }
 
