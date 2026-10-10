@@ -36,7 +36,7 @@ ad-hoc signature you have to re-grant Accessibility after every rebuild
 ## Pull requests
 
 1. Fork and branch from `main`.
-2. Describe what changed and why; include a screenshot or GIF for UI changes.
+2. Describe what changed and why; include a screenshot or screen recording for UI changes.
 3. Make sure CI passes.
 
 By contributing you agree that your contributions are licensed under the [MIT License](LICENSE).

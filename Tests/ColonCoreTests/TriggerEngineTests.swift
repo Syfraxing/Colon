@@ -498,16 +498,14 @@ final class TriggerEngineTests: XCTestCase {
 }
 
 final class TriggerEngineV04Tests: XCTestCase {
-    private let shortcodes: Set<String> = ["joy", "smile", "gift", "-1", "+1"]
+    private let shortcodes: Set<String> = ["joy", "smile", "-1", "+1"]
 
     private func makeEngine(trigger: String = ":", minQueryLength: Int = 2, recents: Bool = true,
-                            horizontal: Bool = false, gif: Bool = true, textTarget: Bool = true) -> TriggerEngine {
+                            horizontal: Bool = false) -> TriggerEngine {
         let known = shortcodes
-        var engine = TriggerEngine(trigger: trigger, minQueryLength: minQueryLength, autoReplaceOnClosingTrigger: true,
-                                   showsRecentsOnTrigger: recents, horizontalLayout: horizontal, gifSearchEnabled: gif,
-                                   shortcodeExists: { known.contains($0) })
-        engine.textTargetConfirmed = textTarget
-        return engine
+        return TriggerEngine(trigger: trigger, minQueryLength: minQueryLength, autoReplaceOnClosingTrigger: true,
+                             showsRecentsOnTrigger: recents, horizontalLayout: horizontal,
+                             shortcodeExists: { known.contains($0) })
     }
 
     @discardableResult
@@ -843,108 +841,6 @@ final class TriggerEngineV04Tests: XCTestCase {
         XCTAssertEqual(engine.query, "joy")
     }
 
-    // MARK: GIF search
-
-    func testGifSpaceOpensGIFSearch() {
-        var engine = makeEngine()
-        type("lol :gif", into: &engine)
-        let result = engine.feed(.text(" "))
-        XCTAssertEqual(result, TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
-        XCTAssertNil(engine.query)
-        XCTAssertFalse(engine.isShowing)
-    }
-
-    func testGifSpaceIgnoresPickerVisibility() {
-        for visible in [false, true] {
-            var engine = makeEngine()
-            type(":gif", into: &engine)
-            XCTAssertEqual(engine.handle(.text(" "), pickerVisible: visible),
-                           TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
-        }
-    }
-
-    func testGifUppercase() {
-        var engine = makeEngine()
-        type(":GIF", into: &engine)
-        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
-    }
-
-    func testGifMultiCharTriggerDeleteCount() {
-        var engine = makeEngine(trigger: "::")
-        type("::gif", into: &engine)
-        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 5), swallow: true))
-    }
-
-    func testGifDisabledIsOrdinaryQuery() {
-        var engine = makeEngine(gif: false)
-        type(":gif", into: &engine)
-        let result = engine.feed(.text(" "))
-        XCTAssertEqual(result, TriggerResult(.hide))
-        XCTAssertFalse(result.swallow)
-    }
-
-    func testGifRequiresBoundary() {
-        for text in ["a:gif", "12:gif", "http:gif", "std::gif"] {
-            var engine = makeEngine()
-            type(text, into: &engine)
-            let result = engine.feed(.text(" "))
-            XCTAssertFalse(result.swallow, text)
-            if case .openGIFSearch = result.action { XCTFail("GIF search after \(text)") }
-        }
-    }
-
-    func testGifsIsNormalQuery() {
-        var engine = makeEngine()
-        XCTAssertEqual(type(":gifs", into: &engine), TriggerResult(.show(query: "gifs")))
-        let result = engine.feed(.text(" "))
-        XCTAssertEqual(result, TriggerResult(.hide))
-        XCTAssertFalse(result.swallow)
-    }
-
-    func testGifOnlyOnSpace() {
-        var engine = makeEngine()
-        type(":gif", into: &engine)
-        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 4), swallow: true))
-
-        engine = makeEngine()
-        type(":gif", into: &engine)
-        XCTAssertEqual(engine.feed(.text("\t")), TriggerResult(.hide))
-
-        engine = makeEngine()
-        type(":gif", into: &engine)
-        // Composed multi-character input cannot be partially swallowed.
-        let composed = engine.feed(.text(" x"))
-        XCTAssertFalse(composed.swallow)
-    }
-
-    func testGifAfterBackspaceEdit() {
-        var engine = makeEngine()
-        type(":gift", into: &engine)
-        _ = engine.feed(.backspace)
-        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
-    }
-
-    func testGifWithoutUsableFocusPassesSpaceAndDeletesNothing() {
-        var engine = makeEngine(textTarget: false)
-        type(":gif", into: &engine)
-        let result = engine.feed(.text(" "))
-        XCTAssertEqual(result, TriggerResult(.hide))
-        XCTAssertFalse(result.swallow)
-        XCTAssertNil(engine.query)
-        // Confirmed later in another capture, it works.
-        engine.textTargetConfirmed = true
-        type(":gif", into: &engine)
-        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
-    }
-
-    func testGifMixedCase() {
-        for word in ["Gif", "gIF", "giF"] {
-            var engine = makeEngine()
-            type(":\(word)", into: &engine)
-            XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true), word)
-        }
-    }
-
     // MARK: Strip engagement
 
     func testUpOnUnengagedStripPassesThrough() {
@@ -1053,12 +949,6 @@ final class TriggerEngineV04Tests: XCTestCase {
         engine.keepOpenInsertFailed()
         XCTAssertTrue(engine.isMultiInserting)
         XCTAssertEqual(engine.typedLength, 0)
-    }
-
-    func testGifShortcodeClosingTriggerStillWorks() {
-        var engine = makeEngine()
-        type(":gift", into: &engine)
-        XCTAssertEqual(type(":", into: &engine), TriggerResult(.commitShortcode("gift", deleteCount: 5), swallow: true))
     }
 }
 

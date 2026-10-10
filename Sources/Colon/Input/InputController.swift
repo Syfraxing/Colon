@@ -22,10 +22,6 @@ protocol InputControllerDelegate: AnyObject {
     /// The picker is on screen with a selectable row (`picker.isVisible && picker.selectedSuggestion != nil`).
     /// Picker keys are swallowed only while this is true.
     func inputPickerIsVisible() -> Bool
-    /// `<trigger>gif` + space: `<trigger>gif` has been deleted; open GIF search for the frontmost app.
-    /// `pendingText` is what was typed after the space before this call (seed for the search field).
-    /// Always called asynchronously, never from inside the tap callback.
-    func inputOpenGIFSearch(context: PredictionContext, pendingText: String)
 }
 
 /// Owns the CGEventTap, runs `TriggerEngine`, honours exclusions/secure input,
@@ -54,7 +50,6 @@ final class InputController: ObservableObject {
             autoReplaceOnClosingTrigger: settings.autoReplaceOnClosingTrigger,
             showsRecentsOnTrigger: settings.showRecentsOnTrigger,
             horizontalLayout: settings.pickerLayout == .compact,
-            gifSearchEnabled: settings.gifSearchEnabled,
             shortcodeExists: { EmojiStore.shared.emoji(forShortcode: $0) != nil }
         )
     }
@@ -80,19 +75,9 @@ final class InputController: ObservableObject {
 
     /// Picker visibility as driven by us (the engine may want it shown before the AX probe returns).
     private var pickerVisible = false
-    /// Bumped whenever a capture ends so stale probe results are dropped.
-    private var captureID = 0
-    private var probeInFlight = false
-    private var latestQuery = ""
-    /// This capture's focus probe found a readable, non-secure text element.
-    private var focusUsable = false
-    /// The bare-trigger strip may show (its delay passed without another key).
-    private var stripDelayElapsed = false
+    /// Probe result, anchor and context of the current capture.
+    private var capture = CaptureSession()
     private var stripWork: DispatchWorkItem?
-    /// Printable keys typed after `:gif ` until the GIF panel opens. Never logged.
-    private var gifPending: (text: String, deadline: Date)?
-    private var anchor: CGRect?
-    private var context = PredictionContext()
     private var idleWork: DispatchWorkItem?
 
     private let axQueue = DispatchQueue(label: "Colon.input.ax", qos: .userInteractive)
@@ -105,9 +90,6 @@ final class InputController: ObservableObject {
     private static let healthInterval: TimeInterval = 2
     /// The bare-trigger strip waits this long for another key, so `a :)` or `Time: ` never flash it.
     private static let stripDelay: TimeInterval = 0.1
-    /// Keys typed after `:gif ` are held for the GIF search field for at most this long / this many.
-    private static let gifPendingWindow: TimeInterval = 0.5
-    private static let gifPendingLimit = 64
 
     // MARK: Lifecycle
 
@@ -289,7 +271,6 @@ final class InputController: ObservableObject {
             return pass
         }
         if SyntheticEvent.isSynthetic(event) { return pass }
-        if gifPending != nil, let held = holdForGIFSearch(event) { return held }
 
         if let reason = silenceReason() {
             if engine.isTracking {
@@ -303,13 +284,13 @@ final class InputController: ObservableObject {
         // Picker keys belong to the picker only while it is on screen with a row to pick: we have
         // shown it (the focus probe may still be running) and the UI confirms a selection.
         let visible = pickerVisible && (delegate?.inputPickerIsVisible() ?? false)
-        let wasMultiInserting = engine.isMultiInserting
         cancelStrip()
-        engine.textTargetConfirmed = focusUsable
         let result = engine.handle(input, pickerVisible: visible)
-        if wasMultiInserting, !engine.isMultiInserting, !result.swallow {
-            // A key that closes multi-insert ends that capture (a fresh trigger starts a new one,
-            // anchored where it is typed).
+        if !result.action.isCommit, !capture.follows(engine) {
+            // The engine ended the capture (also silently, as with `:D ` or `:-)`) or began a new one
+            // (a trigger right after multi-insert): forget the old probe, anchor and context, so the
+            // next capture probes and anchors where it is typed. Commits end the capture themselves,
+            // after the delegate has read the selection.
             endCapture(notifyDelegate: true)
         }
         switch result.action {
@@ -319,12 +300,9 @@ final class InputController: ObservableObject {
             show(query: query)
         case .hide:
             InputLog.debug("hide")
-            if engine.isTracking {
-                // Still capturing (e.g. below the minimum length): keep the anchor and probe result.
-                hidePicker()
-            } else {
-                endCapture(notifyDelegate: true)
-            }
+            // Still capturing (e.g. below the minimum length): keep the anchor and probe result.
+            // A capture the engine ended was ended above.
+            hidePicker()
         case .moveSelection(let delta):
             delegate?.inputMoveSelection(by: delta)
         case .commitSelection(let deleteCount):
@@ -336,15 +314,12 @@ final class InputController: ObservableObject {
         case .commitSelectionKeepOpen(let deleteCount):
             commitSelectionKeepOpen(deleteCount: deleteCount, key: event, proxy: proxy)
             return nil
-        case .openGIFSearch(let deleteCount):
-            openGIFSearch(deleteCount: deleteCount, proxy: proxy)
-            return nil
         }
-        // Probe the focused element as soon as a trigger is typed: the anchor, the context and the
-        // GIF trigger's text-field check all come from it.
-        if engine.isTracking, !focusUsable, !probeInFlight {
+        // Probe the focused element as soon as a trigger is typed: the anchor and the context come
+        // from it.
+        if capture.needsProbe {
             InputLog.debug("capture started, probing focus")
-            probe(captureID: captureID, attempt: 0)
+            probe(captureID: capture.startProbe(), attempt: 0)
         }
         if engine.isTracking { scheduleIdleTimeout() } else { cancelIdleTimeout() }
         return result.swallow ? nil : pass
@@ -376,49 +351,6 @@ final class InputController: ObservableObject {
         InputLog.debug("commit selection (keep open), deleteCount \(deleteCount)")
         Inserter.replace(deleteCount: deleteCount, with: text, method: settings.insertionMethod, poster: .tap(proxy))
         scheduleIdleTimeout()
-    }
-
-    /// `:gif` + space (swallowed; the engine only allows it after a usable focus probe): delete
-    /// `:gif`, close the emoji picker and open GIF search on the next main-queue turn. Keys typed
-    /// until then are held for its search field.
-    private func openGIFSearch(deleteCount: Int, proxy: CGEventTapProxy) {
-        let app = frontmostApp
-        let context = self.context
-        endCapture(notifyDelegate: true)
-        InputLog.debug("open GIF search, deleteCount \(deleteCount)")
-        // Pure deletion: backspaces work the same for both insertion methods.
-        Inserter.replace(deleteCount: deleteCount, with: "", method: .typing, poster: .tap(proxy))
-        gifPending = ("", Date().addingTimeInterval(Self.gifPendingWindow))
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let pendingText = self.gifPending?.text ?? ""
-                self.gifPending = nil
-                guard NSWorkspace.shared.frontmostApplication == app else { return }
-                self.delegate?.inputOpenGIFSearch(context: context, pendingText: pendingText)
-            }
-        }
-    }
-
-    /// While GIF search is opening, printable keys (and backspace over them) are swallowed into the
-    /// pending text; anything else, the size limit or the time limit ends holding. Returns nil when
-    /// the event should go through normal handling.
-    private func holdForGIFSearch(_ event: CGEvent) -> Unmanaged<CGEvent>?? {
-        guard let pending = gifPending, Date() < pending.deadline, silenceReason() == nil else {
-            gifPending = nil
-            return nil
-        }
-        switch translate(event) {
-        case .text(let text) where pending.text.count + text.count <= Self.gifPendingLimit:
-            gifPending?.text += text
-            return .some(nil)
-        case .backspace where !pending.text.isEmpty:
-            gifPending?.text.removeLast()
-            return .some(nil)
-        default:
-            gifPending = nil
-            return nil
-        }
     }
 
     /// The closing trigger was swallowed: insert the shortcode's emoji, or re-post the trigger
@@ -502,8 +434,8 @@ final class InputController: ObservableObject {
     // MARK: Picker presentation
 
     private func show(query: String) {
-        latestQuery = query
-        if query.isEmpty, !pickerVisible, !stripDelayElapsed {
+        capture.latestQuery = query
+        if query.isEmpty, !pickerVisible, !capture.stripDelayElapsed {
             scheduleStrip()
             return
         }
@@ -513,21 +445,21 @@ final class InputController: ObservableObject {
     /// Shows or updates the picker once the focus probe succeeded (and, for the bare-trigger strip,
     /// once its delay has passed).
     private func presentIfReady() {
-        guard engine.isShowing, focusUsable else { return }
-        if latestQuery.isEmpty, !pickerVisible, !stripDelayElapsed { return }
+        guard engine.isShowing, capture.focusUsable else { return }
+        if capture.latestQuery.isEmpty, !pickerVisible, !capture.stripDelayElapsed { return }
         pickerVisible = true
-        InputLog.debug("show query \(latestQuery)")
-        delegate?.inputShow(query: latestQuery, caret: anchor, context: context)
+        InputLog.debug("show query \(capture.latestQuery)")
+        delegate?.inputShow(query: capture.latestQuery, caret: capture.anchor, context: capture.context)
     }
 
     private func scheduleStrip() {
         stripWork?.cancel()
-        let id = captureID
+        let id = capture.id
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, id == self.captureID else { return }
+                guard let self, self.capture.isCurrent(id) else { return }
                 self.stripWork = nil
-                self.stripDelayElapsed = true
+                self.capture.stripDelayElapsed = true
                 self.presentIfReady()
             }
         }
@@ -549,9 +481,9 @@ final class InputController: ObservableObject {
     }
 
     /// Reads the focused element off the main thread one hop after the key, so the target app has
-    /// already applied it, then shows the picker if the capture is still current.
+    /// already applied it, then shows the picker if the capture is still current. The caller has
+    /// marked the probe as running (`CaptureSession.startProbe`).
     private func probe(captureID id: Int, attempt: Int) {
-        probeInFlight = true
         let app = frontmostApp
         let pid = app?.processIdentifier
         let bundleID = app?.bundleIdentifier
@@ -570,17 +502,15 @@ final class InputController: ObservableObject {
     }
 
     private func finishProbe(_ result: FocusProbe, captureID id: Int, attempt: Int, app: NSRunningApplication?) {
-        guard id == captureID, engine.isTracking, frontmostApp == app else {
-            if id == captureID { probeInFlight = false }
+        guard capture.isCurrent(id), engine.isTracking, frontmostApp == app else {
+            capture.probeEnded(captureID: id)
             return
         }
         switch result.status {
         case .usable:
-            probeInFlight = false
-            focusUsable = true
-            anchor = result.anchor ?? CaretLocator.mouseAnchor()
-            context = PredictionContext(appName: app?.localizedName, bundleID: app?.bundleIdentifier,
-                                        textBeforeTrigger: settings.sendTextContext ? result.textBeforeTrigger : nil)
+            let context = PredictionContext(appName: app?.localizedName, bundleID: app?.bundleIdentifier,
+                                            textBeforeTrigger: settings.sendTextContext ? result.textBeforeTrigger : nil)
+            capture.probeSucceeded(captureID: id, anchor: result.anchor ?? CaretLocator.mouseAnchor(), context: context)
             InputLog.debug("focus usable (anchor \(result.anchor == nil ? "mouse" : "ax"))")
             presentIfReady()
         case .noFocusedElement where attempt < Self.probeRetryDelays.count:
@@ -590,14 +520,14 @@ final class InputController: ObservableObject {
         case .noFocusedElement, .secure, .notText:
             // Fail closed: no picker, nothing swallowed for this capture.
             InputLog.debug("silent: focused element \(result.status)")
-            probeInFlight = false
+            capture.probeEnded(captureID: id)
             resetCapture()
         }
     }
 
     private func retryProbe(captureID id: Int, attempt: Int) {
-        guard id == captureID, engine.isTracking else {
-            if id == captureID { probeInFlight = false }
+        guard capture.isCurrent(id), engine.isTracking else {
+            capture.probeEnded(captureID: id)
             return
         }
         probe(captureID: id, attempt: attempt)
@@ -611,16 +541,11 @@ final class InputController: ObservableObject {
         endCapture(notifyDelegate: true)
     }
 
-    /// Clears per-capture UI state; hides the picker through the delegate if it is visible.
+    /// Clears per-capture state (a new capture starts from scratch, and probes or timers of this one
+    /// are dropped); hides the picker through the delegate if it is visible.
     private func endCapture(notifyDelegate: Bool) {
-        captureID &+= 1
-        probeInFlight = false
-        focusUsable = false
-        stripDelayElapsed = false
+        capture.restart(for: engine)
         cancelStrip()
-        anchor = nil
-        context = PredictionContext()
-        latestQuery = ""
         cancelIdleTimeout()
         let wasVisible = pickerVisible
         pickerVisible = false
@@ -696,13 +621,12 @@ final class InputController: ObservableObject {
         Publishers.CombineLatest(
             Publishers.CombineLatest3(settings.$triggerString, settings.$minQueryLength,
                                       settings.$autoReplaceOnClosingTrigger),
-            Publishers.CombineLatest3(settings.$showRecentsOnTrigger, settings.$pickerLayout,
-                                      settings.$gifSearchEnabled)
+            Publishers.CombineLatest(settings.$showRecentsOnTrigger, settings.$pickerLayout)
         )
         .sink { [weak self] typing, features in
             self?.configureEngine(EngineConfiguration(
                 trigger: typing.0, minQueryLength: typing.1, autoReplace: typing.2,
-                showsRecents: features.0, horizontalLayout: features.1 == .compact, gifSearch: features.2))
+                showsRecents: features.0, horizontalLayout: features.1 == .compact))
         }
         .store(in: &cancellables)
         // Delivered after the property is set, so `checkHealth` sees the new value and tears the
@@ -739,11 +663,10 @@ final class InputController: ObservableObject {
         var autoReplace: Bool
         var showsRecents: Bool
         var horizontalLayout: Bool
-        var gifSearch: Bool
     }
 
-    /// Applies settings to the engine. Anything that changes how the open capture is read (trigger,
-    /// minimum, auto replace, recents, layout) resets it; the GIF switch only affects the next space.
+    /// Applies settings to the engine. Any change affects how the open capture is read (trigger,
+    /// minimum, auto replace, recents, layout), so it resets it.
     private func configureEngine(_ wanted: EngineConfiguration) {
         var wanted = wanted
         wanted.trigger = AppSettings.isValidTrigger(wanted.trigger) ? wanted.trigger : ":"
@@ -751,18 +674,15 @@ final class InputController: ObservableObject {
         let current = EngineConfiguration(
             trigger: engine.trigger, minQueryLength: engine.minQueryLength,
             autoReplace: engine.autoReplaceOnClosingTrigger, showsRecents: engine.showsRecentsOnTrigger,
-            horizontalLayout: engine.horizontalLayout, gifSearch: engine.gifSearchEnabled)
+            horizontalLayout: engine.horizontalLayout)
         guard wanted != current else { return }
-        var unchangedButGIF = wanted
-        unchangedButGIF.gifSearch = current.gifSearch
-        if unchangedButGIF != current { resetCapture() }
+        resetCapture()
         engine.trigger = wanted.trigger
         engine.minQueryLength = wanted.minQueryLength
         engine.autoReplaceOnClosingTrigger = wanted.autoReplace
         engine.showsRecentsOnTrigger = wanted.showsRecents
         engine.horizontalLayout = wanted.horizontalLayout
-        engine.gifSearchEnabled = wanted.gifSearch
-        InputLog.debug("engine configured: trigger \(wanted.trigger), min \(wanted.minQueryLength), autoReplace \(wanted.autoReplace), recents \(wanted.showsRecents), compact \(wanted.horizontalLayout), gif \(wanted.gifSearch)")
+        InputLog.debug("engine configured: trigger \(wanted.trigger), min \(wanted.minQueryLength), autoReplace \(wanted.autoReplace), recents \(wanted.showsRecents), compact \(wanted.horizontalLayout)")
     }
 
     /// IMEs (Japanese, Chinese, …) compose text the tap cannot see; stay silent while one is active.
@@ -771,6 +691,16 @@ final class InputController: ObservableObject {
         guard let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return true }
         let type = Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
         return type == (kTISTypeKeyboardLayout as String)
+    }
+}
+
+private extension TriggerResult.Action {
+    /// Inserts (or re-posts the key); the commit path ends or keeps the capture itself.
+    var isCommit: Bool {
+        switch self {
+        case .commitSelection, .commitShortcode, .commitSelectionKeepOpen: true
+        case .none, .show, .hide, .moveSelection: false
+        }
     }
 }
 

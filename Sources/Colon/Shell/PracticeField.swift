@@ -38,9 +38,8 @@ final class PracticeController: ObservableObject {
         trigger.minQueryLength = settings.minQueryLength
         trigger.autoReplaceOnClosingTrigger = settings.autoReplaceOnClosingTrigger
         trigger.showsRecentsOnTrigger = settings.showRecentsOnTrigger
-        // The practice list is always vertical, and GIF search needs another app to paste into.
+        // The practice list is always vertical.
         trigger.horizontalLayout = false
-        trigger.gifSearchEnabled = false
 
         let result = trigger.handle(input, pickerVisible: isShowing && !visibleSuggestions.isEmpty)
         switch result.action {
@@ -71,9 +70,6 @@ final class PracticeController: ObservableObject {
             } else {
                 trigger.keepOpenInsertFailed()
             }
-        case .openGIFSearch:
-            // Unreachable: GIF search is turned off for the practice engine above.
-            hide()
         case .commitShortcode(let shortcode, let deleteCount):
             if let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) {
                 insert(engine.output(for: emoji), replacing: deleteCount, in: textView)

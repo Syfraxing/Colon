@@ -30,9 +30,6 @@ public struct TriggerResult: Equatable, Sendable {
         /// Insert the selected suggestion and keep the picker open for another pick (⌘↩).
         /// The first one deletes trigger + query; later ones delete nothing.
         case commitSelectionKeepOpen(deleteCount: Int)
-        /// `<trigger>gif` + space: delete the `deleteCount` typed characters (the space was
-        /// swallowed) and open GIF search.
-        case openGIFSearch(deleteCount: Int)
     }
 
     public var action: Action
@@ -50,8 +47,8 @@ public struct TriggerResult: Equatable, Sendable {
 /// letters, digits, `_`, `+`, `-`; whitespace or other punctuation ends tracking.
 ///
 /// Privacy: the only state derived from typing is `atBoundary` (one bit about the last
-/// character), how many characters of the trigger have been typed, and the active query.
-/// Nothing typed outside an active `:query` is retained.
+/// character), how many characters of the trigger have been typed, the active query and a count
+/// of captures started. Nothing typed outside an active `:query` is retained.
 /// OWNER: input worker.
 public struct TriggerEngine: Sendable {
     /// Longest query tracked; typing past it ends tracking (no shortcode is that long).
@@ -70,12 +67,6 @@ public struct TriggerEngine: Sendable {
     public var showsRecentsOnTrigger: Bool
     /// Compact (horizontal) picker: ←/→ move the selection while it is visible instead of hiding it.
     public var horizontalLayout: Bool
-    /// `<trigger>gif` + space opens GIF search.
-    public var gifSearchEnabled: Bool
-    /// The input layer confirmed that this capture types into a readable, non-secure text element
-    /// (a usable focus probe). GIF search fires only then; otherwise the space is ordinary typing.
-    /// The input layer sets it before every `handle`.
-    public var textTargetConfirmed = false
 
     /// Whether the picker is currently shown (input layer reports back what the UI did).
     public private(set) var isShowing = false
@@ -99,24 +90,26 @@ public struct TriggerEngine: Sendable {
     /// Characters of the closing trigger typed after the query (multi-char triggers only;
     /// they reached the app, so they count towards deletion).
     private var closingProgress = 0
-
-    /// Keyword typed after the trigger that, followed by a space, opens GIF search.
-    public static let gifKeyword = "gif"
+    /// Counts the captures started, so each one has an identity (`capture`).
+    private var captureSerial = 0
 
     public init(trigger: String = ":", minQueryLength: Int = 2, autoReplaceOnClosingTrigger: Bool = true,
-                showsRecentsOnTrigger: Bool = false, horizontalLayout: Bool = false, gifSearchEnabled: Bool = false,
+                showsRecentsOnTrigger: Bool = false, horizontalLayout: Bool = false,
                 shortcodeExists: @escaping @Sendable (String) -> Bool = { _ in false }) {
         self.trigger = trigger.isEmpty ? ":" : trigger
         self.minQueryLength = max(0, minQueryLength)
         self.autoReplaceOnClosingTrigger = autoReplaceOnClosingTrigger
         self.showsRecentsOnTrigger = showsRecentsOnTrigger
         self.horizontalLayout = horizontalLayout
-        self.gifSearchEnabled = gifSearchEnabled
         self.shortcodeExists = shortcodeExists
     }
 
     /// True while a trigger has been typed and a query is being captured.
     public var isTracking: Bool { query != nil }
+
+    /// Identifies the open capture: a new value every time a trigger starts one (even right after
+    /// another ended in the same key), nil when not tracking.
+    public var capture: Int? { query == nil ? nil : captureSerial }
 
     /// Characters of the active capture currently in the target app (trigger + query + any partial
     /// closing trigger), nil when not tracking. Used when the user picks with the mouse.
@@ -143,9 +136,6 @@ public struct TriggerEngine: Sendable {
         switch input {
         case .text(let text):
             let characters = Array(text)
-            if characters.count == 1, let gif = gifTrigger(characters[0]) {
-                return gif
-            }
             for (index, character) in characters.enumerated() {
                 // A commit is only honoured for a single typed character: with composed multi-char
                 // input we cannot swallow part of the event.
@@ -373,6 +363,7 @@ public struct TriggerEngine: Sendable {
     }
 
     private mutating func beginTracking() {
+        captureSerial &+= 1
         query = ""
         isMultiInserting = false
         selectionMoved = false
@@ -398,16 +389,6 @@ public struct TriggerEngine: Sendable {
         }
         isShowing = false
         return TriggerResult(wasShowing ? .hide : .none)
-    }
-
-    /// `<trigger>gif` followed by a typed space opens GIF search. The space is swallowed, so only
-    /// trigger + keyword reached the app. `:gifs` and `:gif:` stay ordinary.
-    private mutating func gifTrigger(_ character: Character) -> TriggerResult? {
-        guard gifSearchEnabled, textTargetConfirmed, character == " ", closingProgress == 0,
-              let query, query.lowercased() == Self.gifKeyword else { return nil }
-        let deleteCount = trigger.count + query.count
-        endTracking(boundary: true)
-        return TriggerResult(.openGIFSearch(deleteCount: deleteCount), swallow: true)
     }
 
     // MARK: - Character classes

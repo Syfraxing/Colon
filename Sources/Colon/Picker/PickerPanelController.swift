@@ -192,13 +192,6 @@ final class PickerPanelController {
         model.moveSelection(by: delta)
     }
 
-    /// False only while the bare-trigger strip is up and not yet engaged (no row highlighted;
-    /// Return/Tab/Esc belong to the app). Always true for a real query.
-    var isEngaged: Bool {
-        model.syncIfNeeded()
-        return !model.isStripUnengaged
-    }
-
     /// Engages the bare-trigger strip and highlights its first emoji. No-op otherwise.
     func engage() {
         model.engage()

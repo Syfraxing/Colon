@@ -50,7 +50,12 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         settingsWindow.onAPIKeyChanged = { [weak self] in self?.engine.reloadAPIKey() }
         KeyboardShortcuts.onKeyUp(for: .openPicker) { [weak self] in self?.toggleSearch() }
 
-        startGIFSearch()
+        // Build the insert click before the first insert whenever the sound is (or turns) on.
+        settings.$playsInsertSound
+            .removeDuplicates()
+            .sink { isOn in if isOn { Feedback.warmUp() } }
+            .store(in: &cancellables)
+
         input.start()
         settingsWindow.showOnboardingIfNeeded()
         updater.start()
@@ -82,7 +87,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
             return
         }
         guard settings.isEnabled else { return }
-        gifPicker?.dismiss()
         input.cancelTracking()
         picker.hide()
         searchTargetApp = NSWorkspace.shared.frontmostApplication
@@ -160,9 +164,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     // MARK: v0.4 input
 
-    /// GIF search panel; the GIF controller assigns itself here in `start()`.
-    var gifPicker: GIFPicking?
-
     /// ⌘↩: insert the selection but leave the picker (and the capture) open.
     func inputCommitSelectionKeepOpen() -> String? {
         guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
@@ -170,33 +171,5 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         Feedback.inserted(settings)
         picker.noteInserted()
         return engine.output(for: emoji)
-    }
-
-    func inputOpenGIFSearch(context: PredictionContext, pendingText: String) {
-        openGIFSearch(context: context, pendingText: pendingText)
-    }
-
-    func openGIFSearch(context: PredictionContext, pendingText: String) {
-        gifPicker?.show(context: context, pendingText: pendingText)
-    }
-
-    // MARK: v0.4 gif
-
-    /// Creates the GIF panel; the input layer opens it via `gifPicker.show(context:pendingText:)`.
-    private func startGIFSearch() {
-        let controller = GIFPickerController(settings: settings)
-        controller.onOpenSettings = { [weak self] in self?.settingsWindow.show(tab: .gifs) }
-        controller.onWillShow = { [weak self] in
-            guard let self else { return }
-            self.input.cancelTracking()
-            self.picker.hide()
-            self.engine.reset()
-            self.searchTargetApp = nil
-        }
-        controller.onInserted = { [weak self] in
-            guard let self else { return }
-            Feedback.inserted(self.settings)
-        }
-        gifPicker = controller
     }
 }

@@ -2,13 +2,22 @@ import AppKit
 import ColonCore
 
 /// Sound and haptics for the picker. Both are opt-out/opt-in per `AppSettings` and cost nothing
-/// when off: the click is synthesized on first use, never at launch.
+/// when off: the click is synthesized only once the sound is turned on (`warmUp`).
 @MainActor
 enum Feedback {
-    /// After an emoji lands in the target app (`playsInsertSound`).
+    /// After an emoji lands in the target app (`playsInsertSound`). Callable from the event tap
+    /// callback: the sound starts on the next main-queue turn, so the callback stays fast.
     static func inserted(_ settings: AppSettings) {
         guard settings.playsInsertSound else { return }
-        InsertClick.shared.play()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { InsertClick.shared.play() }
+        }
+    }
+
+    /// Builds the click voices ahead of the first insert. Call when `playsInsertSound` is on (at
+    /// launch and when it is turned on).
+    static func warmUp() {
+        InsertClick.shared.warmUp()
     }
 
     /// When the highlight moves by keyboard or hover (`hapticFeedback`). Only felt with a finger
@@ -44,6 +53,10 @@ private final class InsertClick {
         }
     }()
     private var next = 0
+
+    func warmUp() {
+        _ = voices
+    }
 
     func play() {
         guard !voices.isEmpty else { return }
