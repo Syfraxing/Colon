@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to (re)build, e.g. v0.3.0
+        description: "Existing tag to (re)build, e.g. v0.3.0. Dispatch from the tag itself (the release environment only admits v* refs): gh workflow run release.yml --ref v0.3.0 -f tag=v0.3.0"
         required: true
       update_feed:
         description: Also publish appcast.xml (only for re-running the newest release)
@@ -177,6 +177,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if [[ "$PUBLISH_FEED" == true ]]; then
+            # Re-check right before anything is uploaded, so a failed check never leaves a
+            # replaced archive behind a stale appcast.
+            scripts/check-feed-forward.sh "$FEED_URL" "$BUILD" "$VERSION"
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             # The live appcast may point at this release's zip; only a run that also
             # publishes a matching appcast may replace it.
@@ -192,9 +197,7 @@ jobs:
             gh release create "$TAG" dist/* "${FLAGS[@]}"
           fi
           if [[ "$PUBLISH_FEED" == true ]]; then
-            # Re-check right before the feed moves; the appcast goes up last, after the
-            # archive it points to.
-            scripts/check-feed-forward.sh "$FEED_URL" "$BUILD" "$VERSION"
+            # The appcast goes up last, after the archive it points to.
             gh release upload "$TAG" "$RUNNER_TEMP/appcast.xml" --clobber
             gh release edit "$TAG" --draft=false --latest
           else
