@@ -164,6 +164,10 @@ else
     warn "no Resources/AppIcon.icns (run 'make icon'); the app will use the generic icon"
 fi
 
+# Licenses travel with the binary: Colon's own and the third-party notices it must ship.
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE.txt"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+
 shopt -s nullglob
 bundles=("$BIN_DIR"/*.bundle)
 [[ -d "$BIN_DIR/${APP_NAME}_ColonCore.bundle" ]] || die "${APP_NAME}_ColonCore.bundle missing from $BIN_DIR"
