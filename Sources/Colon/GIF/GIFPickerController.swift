@@ -9,13 +9,13 @@ import SwiftUI
 ///
 /// Searches go to GIPHY with the user's own key; when a Jev key exists the results are reranked
 /// for the search terms (and, if the user opted in, the text being written). Queries, results
-/// and media live in memory only and are dropped when the panel closes.
+/// and previews live in memory only and are dropped when the panel closes; only a picked GIF is
+/// written to disk, as `giphy-<id>.gif` in Colon's cache folder.
 @MainActor
-final class GIFPickerController {
-    /// Posted by the input layer after it deleted `<trigger>gif `.
-    /// `userInfo["context"]` is the `PredictionContext` of the field being typed in.
-    static let openNotification = Notification.Name("ColonOpenGIFSearch")
-    static let debounce: Duration = .milliseconds(250)
+final class GIFPickerController: @preconcurrency GIFPicking {
+    static let debounce: Duration = .milliseconds(350)
+    /// Shorter queries are not sent (GIPHY's free keys allow 100 requests an hour).
+    static let minQueryLength = 2
 
     /// Opens Settings on the GIFs tab (the no-key state links there).
     var onOpenSettings: (() -> Void)?
@@ -25,7 +25,7 @@ final class GIFPickerController {
     var onInserted: (() -> Void)?
 
     private let settings: AppSettings
-    private let makeClient: (String) -> GIFSearching
+    private let makeClient: (String, GIFRating) -> GIFSearching
     private let makeRanker: (String) -> GIFRanking
     let model = GIFPickerModel()
     private let loader = GIFImageLoader()
@@ -48,7 +48,7 @@ final class GIFPickerController {
     private(set) var isVisible = false
 
     init(settings: AppSettings,
-         makeClient: @escaping (String) -> GIFSearching = { GIPHYClient(apiKey: $0) },
+         makeClient: @escaping (String, GIFRating) -> GIFSearching = { GIPHYClient(apiKey: $0, rating: $1) },
          makeRanker: @escaping (String) -> GIFRanking = { JevGIFRanker(apiKey: $0) }) {
         self.settings = settings
         self.makeClient = makeClient
@@ -68,34 +68,47 @@ final class GIFPickerController {
         model.onRetry = { [weak self] in self?.retry() }
 
         let center = NotificationCenter.default
-        center.publisher(for: Self.openNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] note in
-                let context = note.userInfo?["context"] as? PredictionContext ?? PredictionContext()
-                self?.show(context: context, target: NSWorkspace.shared.frontmostApplication)
-            }
-            .store(in: &cancellables)
         center.publisher(for: NSWindow.didResignKeyNotification, object: panel)
             .sink { [weak self] _ in
                 guard let self, self.isVisible, self.insertTask == nil else { return }
                 self.hide()
             }
             .store(in: &cancellables)
-        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
             .sink { [weak self] _ in self?.hide() }
+            .store(in: &cancellables)
+        // The app the GIF is for went to the background (⌘⇥, Dock click): the pick has nowhere to go.
+        workspace.publisher(for: NSWorkspace.didDeactivateApplicationNotification)
+            .sink { [weak self] note in
+                guard let self, self.isVisible, self.insertTask == nil,
+                      let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      app.processIdentifier == self.target?.processIdentifier else { return }
+                self.hide()
+            }
             .store(in: &cancellables)
         center.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in self?.hide() }
             .store(in: &cancellables)
 
-        // Leftovers from a previous run (the app quit before the 10 minute cleanup).
-        DispatchQueue.global(qos: .utility).async { MainActor.assumeIsolated { GIFInserter.removeAllFiles() } }
+        // Inserted copies are kept for a day (apps may read the file lazily), then pruned.
+        Task.detached(priority: .utility) { GIFInserter.pruneOldFiles() }
     }
 
     // MARK: Show / hide
 
-    /// Opens the panel for `target` (the app that receives the GIF). No-op when GIF search is off.
-    func show(context: PredictionContext, target: NSRunningApplication?) {
+    /// Opens the panel for the frontmost app, with `pendingText` (keys typed right after `:gif `)
+    /// already in the search field. No-op when GIF search is off.
+    func show(context: PredictionContext, pendingText: String) {
+        show(context: context, pendingText: pendingText, target: NSWorkspace.shared.frontmostApplication)
+    }
+
+    func dismiss() {
+        hide()
+    }
+
+    /// Opens the panel for `target`, the app that receives the GIF.
+    func show(context: PredictionContext, pendingText: String = "", target: NSRunningApplication?) {
         guard settings.gifSearchEnabled else { return }
         onWillShow?()
         if isVisible { hide() }
@@ -110,6 +123,7 @@ final class GIFPickerController {
         self.context = context
 
         model.reset()
+        model.searchText = String(pendingText.prefix(64))
         position()
         isVisible = true
         present()
@@ -168,7 +182,11 @@ final class GIFPickerController {
     private func focusSearchField(retries: Int) {
         if let field = model.searchField, field.window === panel {
             panel.makeFirstResponder(field)
-            (field.currentEditor() as? NSTextView)?.insertionPointColor = NSColor(PickerTheme.accent)
+            if let editor = field.currentEditor() as? NSTextView {
+                editor.insertionPointColor = NSColor(PickerTheme.accent)
+                // Focusing selects all; keep typing after the pre-filled text instead.
+                editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+            }
             return
         }
         guard retries > 0 else { return }
@@ -183,6 +201,7 @@ final class GIFPickerController {
     /// Reads both keys off the main thread (a Keychain read can block on an access prompt).
     private func loadKeysAndStart() {
         let wantsJev = settings.useJev
+        let rating = GIFRating.current()
         let session = generation
         keyTask = Task { [weak self] in
             let keys = await Task.detached(priority: .userInitiated) {
@@ -194,7 +213,7 @@ final class GIFPickerController {
                 self.model.showProblem(.noKey)
                 return
             }
-            self.client = self.makeClient(gifKey)
+            self.client = self.makeClient(gifKey, rating)
             self.ranker = keys.jev.map(self.makeRanker)
             self.scheduleSearch(self.model.searchText, debounce: false)
         }
@@ -217,7 +236,16 @@ final class GIFPickerController {
         searchTask?.cancel()
         rerankTask?.cancel()
         model.isRefining = false
-        let terms = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var terms = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // One character is not a search yet: keep what is on screen and send nothing
+        // (with nothing on screen yet, show trending instead).
+        if !terms.isEmpty, terms.count < Self.minQueryLength {
+            if !model.results.isEmpty {
+                model.isLoading = false
+                return
+            }
+            terms = ""
+        }
         let cacheKey = terms.lowercased()
 
         if let cached = cache[cacheKey] {
@@ -306,7 +334,7 @@ final class GIFPickerController {
             do {
                 let data = try await self.loader.data(for: result.full.url)
                 guard !Task.isCancelled, self.isVisible else { return }
-                let fileURL = try GIFInserter.writeTemporaryFile(data, named: result.suggestedFileName)
+                let fileURL = try GIFInserter.writeFile(data, for: result)
                 let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
                 let paste = target.map {
                     !$0.isTerminated && $0.processIdentifier != getpid() && $0.processIdentifier == frontmost

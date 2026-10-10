@@ -1,18 +1,16 @@
 import Foundation
 
 /// Client for the GIPHY API (https://developers.giphy.com/docs/api). Bring-your-own key: a free
-/// beta key from the GIPHY developer dashboard allows 100 calls an hour. Requests always ask
-/// for `rating=pg-13`. The app must show "Powered by GIPHY" wherever results appear.
+/// beta key from the GIPHY developer dashboard allows 100 calls an hour. Every request carries the
+/// user's content rating (default pg-13). The app must show "Powered by GIPHY" wherever results
+/// appear. No `random_id`, no analytics pingbacks.
 ///
 /// The key travels as the `api_key` query item, so request URLs are never logged.
 public struct GIPHYClient: GIFSearching {
     public static let baseURL = URL(string: "https://api.giphy.com/v1/gifs")!
     public static let dashboardURL = URL(string: "https://developers.giphy.com/dashboard/")!
-    public static let rating = "pg-13"
     public static let defaultLimit = 24
     public static let timeout: TimeInterval = 6
-    /// GIFs larger than this are inserted as GIPHY's downsized rendition instead of the original.
-    public static let maxInsertBytes = 6_000_000
 
     /// One shared session. Responses are tiny JSON; nothing is cached.
     public static let sharedSession: URLSession = {
@@ -28,17 +26,14 @@ public struct GIPHYClient: GIFSearching {
     private let apiKey: String
     private let session: URLSession
     private let language: String
+    private let rating: GIFRating
 
-    public init(apiKey: String, session: URLSession = GIPHYClient.sharedSession,
+    public init(apiKey: String, rating: GIFRating = .pg13, session: URLSession = GIPHYClient.sharedSession,
                 language: String = GIPHYClient.preferredLanguage()) {
         self.apiKey = apiKey
+        self.rating = rating
         self.session = session
         self.language = language
-    }
-
-    /// Client for the key in the Keychain, nil when there is none. Call off the main thread.
-    public static func fromKeychain() -> GIPHYClient? {
-        KeychainStore.key(for: .gif).map { GIPHYClient(apiKey: $0) }
     }
 
     public func search(_ terms: String, limit: Int = GIPHYClient.defaultLimit) async throws -> [GIFResult] {
@@ -66,7 +61,7 @@ public struct GIPHYClient: GIFSearching {
             URLQueryItem(name: "q", value: String(terms.prefix(50))),
             URLQueryItem(name: "limit", value: String(Self.clampedLimit(limit))),
             URLQueryItem(name: "offset", value: String(max(0, offset))),
-            URLQueryItem(name: "rating", value: Self.rating),
+            URLQueryItem(name: "rating", value: rating.rawValue),
             URLQueryItem(name: "lang", value: language),
             URLQueryItem(name: "bundle", value: "messaging_non_clips"),
         ])
@@ -75,7 +70,7 @@ public struct GIPHYClient: GIFSearching {
     func trendingRequest(limit: Int) -> URLRequest {
         request(path: "trending", items: [
             URLQueryItem(name: "limit", value: String(Self.clampedLimit(limit))),
-            URLQueryItem(name: "rating", value: Self.rating),
+            URLQueryItem(name: "rating", value: rating.rawValue),
             URLQueryItem(name: "bundle", value: "messaging_non_clips"),
         ])
     }
@@ -141,16 +136,11 @@ public struct GIPHYClient: GIFSearching {
 
     static func result(from item: Item) -> GIFResult? {
         guard item.type == nil || item.type == "gif", let images = item.images else { return nil }
-        let previewCandidates = [images.fixed_width, images.fixed_height, images.downsized, images.original]
-        guard let preview = previewCandidates.lazy.compactMap({ $0?.rendition }).first else { return nil }
-        let original = images.original?.rendition
-        let full: GIFRendition?
-        if let original, (original.byteCount ?? 0) <= maxInsertBytes {
-            full = original
-        } else {
-            full = [images.downsized_medium, images.downsized, images.original].lazy.compactMap { $0?.rendition }.first
-        }
-        guard let full else { return nil }
+        // Grid: fixed_width_small (100 px wide, light). Insert: downsized_medium (< 5 MB).
+        let previewCandidates = [images.fixed_width_small, images.fixed_width, images.downsized]
+        let fullCandidates = [images.downsized_medium, images.downsized, images.original]
+        guard let preview = previewCandidates.lazy.compactMap({ $0?.rendition }).first,
+              let full = fullCandidates.lazy.compactMap({ $0?.rendition }).first else { return nil }
         return GIFResult(id: item.id, title: item.title ?? "", tags: tags(slug: item.slug, id: item.id),
                          preview: preview, full: full)
     }
@@ -184,8 +174,8 @@ public struct GIPHYClient: GIFSearching {
 
     // swiftlint:disable identifier_name
     struct Images: Decodable {
+        let fixed_width_small: Image?
         let fixed_width: Image?
-        let fixed_height: Image?
         let downsized: Image?
         let downsized_medium: Image?
         let original: Image?

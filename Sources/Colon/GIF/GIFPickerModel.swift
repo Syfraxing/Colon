@@ -4,14 +4,14 @@ import SwiftUI
 
 /// Layout constants for the GIF panel.
 enum GIFMetrics {
-    static let cardWidth: CGFloat = 480
-    static let cardHeight: CGFloat = 520
+    static let cardWidth: CGFloat = 432
+    static let cardHeight: CGFloat = 500
     static let searchFieldHeight: CGFloat = 52
     static let footerHeight: CGFloat = 44
     static let columns = 3
     static let gridInset: CGFloat = 10
     static let gridSpacing: CGFloat = 6
-    static let cellHeight: CGFloat = 112
+    static let cellHeight: CGFloat = 100
     static let cellRadius: CGFloat = 9
 
     static var cellWidth: CGFloat {
@@ -178,23 +178,10 @@ final class GIFPickerModel: ObservableObject {
         guard !results.isEmpty else { return }
         navigatedByKeyboard = true
         let current = selectedIndex ?? 0
-        let next = Self.index(after: current, dx: dx, dy: dy, count: results.count, columns: GIFMetrics.columns)
+        let next = GIFGrid.index(after: current, dx: dx, dy: dy, count: results.count, columns: GIFMetrics.columns)
         guard next != selectedIndex else { return }
         selectedID = results[next].id
         scrollRequest += 1
-    }
-
-    /// Grid navigation: ←/→ wrap across rows, ↑/↓ stay in the column and stop at the edges.
-    static func index(after current: Int, dx: Int, dy: Int, count: Int, columns: Int) -> Int {
-        guard count > 0 else { return 0 }
-        var next = current + dx
-        if dy != 0 {
-            let candidate = current + dy * columns
-            next = (0..<count).contains(candidate) ? candidate : current
-            // ↓ from the second-to-last row into a shorter last row: land on its last item.
-            if dy > 0, candidate >= count, current / columns < (count - 1) / columns { next = count - 1 }
-        }
-        return min(max(next, 0), count - 1)
     }
 
     func hover(_ id: String) {

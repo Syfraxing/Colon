@@ -2,7 +2,7 @@ import ColonCore
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, jev, shortcuts, excludedApps, about
+    case general, jev, gifs, shortcuts, excludedApps, about
 
     var id: Self { self }
 
@@ -10,6 +10,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .jev: "Jev"
+        case .gifs: "GIFs"
         case .shortcuts: "Shortcuts"
         case .excludedApps: "Excluded Apps"
         case .about: "About"
@@ -20,6 +21,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape.fill"
         case .jev: "sparkles"
+        case .gifs: "photo.stack.fill"
         case .shortcuts: "command"
         case .excludedApps: "nosign"
         case .about: "info.circle.fill"
@@ -30,6 +32,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: Color(white: 0.55)
         case .jev: ShellTheme.accent
+        case .gifs: Color(red: 0.62, green: 0.36, blue: 0.98)
         case .shortcuts: Color(red: 0.55, green: 0.45, blue: 0.95)
         case .excludedApps: Color(red: 0.95, green: 0.42, blue: 0.40)
         case .about: Color(red: 0.35, green: 0.70, blue: 0.85)
@@ -83,6 +86,8 @@ struct SettingsView: View {
             GeneralSettingsView(settings: settings, launchAtLogin: launchAtLogin)
         case .jev:
             JevSettingsView(settings: settings, key: jevKey, engine: engine)
+        case .gifs:
+            GIFSettingsView(settings: settings)
         case .shortcuts:
             ShortcutsSettingsView(settings: settings)
         case .excludedApps:

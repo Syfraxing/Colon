@@ -522,6 +522,8 @@ struct PoweredByGIPHY: View {
             Text("Powered by")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(theme.tertiary)
+            GIPHYMark()
+                .frame(width: 10, height: 12.5)
             Text("GIPHY")
                 .font(.system(size: 11.5, weight: .black))
                 .tracking(0.3)
@@ -530,6 +532,35 @@ struct PoweredByGIPHY: View {
         .fixedSize()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Powered by GIPHY")
+    }
+}
+
+/// GIPHY's logo mark, drawn in code (the executable target has no image resources): a frame of
+/// green, purple, blue and yellow bars with the pink folded corner, on a 16 × 20 grid.
+struct GIPHYMark: View {
+    private static let green = Color(red: 0.0, green: 1.0, blue: 0.6)
+    private static let purple = Color(red: 0.6, green: 0.2, blue: 1.0)
+    private static let blue = Color(red: 0.0, green: 0.8, blue: 1.0)
+    private static let yellow = Color(red: 1.0, green: 0.953, blue: 0.361)
+    private static let pink = Color(red: 1.0, green: 0.4, blue: 0.4)
+
+    var body: some View {
+        Canvas { context, size in
+            let unit = min(size.width / 16, size.height / 20)
+            func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color) {
+                context.fill(Path(CGRect(x: x * unit, y: y * unit, width: w * unit, height: h * unit)), with: .color(color))
+            }
+            bar(0, 2, 2, 18, Self.green)      // left
+            bar(14, 6, 2, 14, Self.purple)    // right
+            bar(0, 18, 16, 2, Self.blue)      // bottom
+            bar(0, 0, 10, 2, Self.yellow)     // top
+            bar(10, 0, 2, 2, Self.pink)       // folded corner
+            bar(12, 2, 2, 2, Self.pink)
+            bar(14, 4, 2, 2, Self.pink)
+            bar(10, 2, 2, 4, Self.purple.opacity(0.85))
+            bar(12, 4, 2, 2, Self.purple.opacity(0.85))
+        }
+        .accessibilityHidden(true)
     }
 }
 

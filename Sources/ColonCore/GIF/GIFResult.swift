@@ -56,13 +56,11 @@ public struct GIFResult: Identifiable, Hashable, Sendable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// A file name for the inserted GIF, derived from the title (never from the user's query).
-    public var suggestedFileName: String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
-        let cleaned = String(displayTitle.unicodeScalars.filter { allowed.contains($0) })
-            .trimmingCharacters(in: .whitespaces)
-        let base = cleaned.isEmpty ? "GIF" : String(cleaned.prefix(60))
-        return base + ".gif"
+    /// File name for the inserted copy: `giphy-<id>.gif` (never derived from the user's query).
+    public var fileName: String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+        let safeID = String(id.unicodeScalars.filter { allowed.contains($0) }.prefix(64))
+        return "giphy-\(safeID.isEmpty ? "gif" : safeID).gif"
     }
 }
 
@@ -93,4 +91,53 @@ public protocol GIFSearching: Sendable {
     func search(_ terms: String, limit: Int) async throws -> [GIFResult]
     /// What is popular right now (shown before the user types).
     func trending(limit: Int) async throws -> [GIFResult]
+}
+
+/// GIPHY content rating, chosen in Settings → GIFs. Stored in `UserDefaults` under `defaultsKey`.
+public enum GIFRating: String, CaseIterable, Sendable, Identifiable {
+    case g
+    case pg
+    case pg13 = "pg-13"
+    case r
+
+    public static let defaultsKey = "gifRating"
+    public static let `default` = GIFRating.pg13
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .g: "G"
+        case .pg: "PG"
+        case .pg13: "PG-13"
+        case .r: "R"
+        }
+    }
+
+    /// The saved rating, `.pg13` when unset or unknown.
+    public static func current(_ defaults: UserDefaults = .standard) -> GIFRating {
+        defaults.string(forKey: defaultsKey).flatMap(GIFRating.init(rawValue:)) ?? .default
+    }
+}
+
+/// Keyboard movement in the GIF grid.
+public enum GIFGrid {
+    /// ←/→ step through results (wrapping across rows); ↑/↓ move by a row and stop at the edges,
+    /// except ↓ from the row above a shorter last row lands on the last result.
+    public static func index(after current: Int, dx: Int, dy: Int, count: Int, columns: Int) -> Int {
+        guard count > 0, columns > 0 else { return 0 }
+        let current = min(max(current, 0), count - 1)
+        var next = current + dx
+        if dy != 0 {
+            let candidate = current + dy * columns
+            if (0..<count).contains(candidate) {
+                next = candidate
+            } else if dy > 0, current / columns < (count - 1) / columns {
+                next = count - 1
+            } else {
+                next = current
+            }
+        }
+        return min(max(next, 0), count - 1)
+    }
 }
