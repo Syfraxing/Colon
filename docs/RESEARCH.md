@@ -14,7 +14,7 @@ Contents: 1 Landscape · 2 Per-product findings · 3 Implementation techniques (
 | --- | --- | --- | --- | --- | --- |
 | **Rocket** (Matthew Palmer) | menu-bar app | `:` (configurable single punct; `:` `(` `+` recommended) | no (free; Pro $10) | yes | The original. Needs Accessibility; AppleScript to read browser URL for per-site disable. https://matthewpalmer.net/rocket/ , https://matthewpalmer.net/rocket/help.html |
 | **Macmoji** (warpling) | *not an app* — 1741 macOS Text-Replacement entries (`:boom:`→💥) as a `.plist` (+ Alfred/Keyboard Maestro outputs) | `:name:` + Space | MIT | no | https://github.com/warpling/Macmoji |
-| **Mojito** (wr) | menu-bar app, Swift | `:` emoji, `::` symbols, `:::` GIF, `:?` favorites | **AGPL-3.0** | yes | Best-engineered reference. https://github.com/wr/mojito |
+| **Mojito** (wr) | menu-bar app, Swift | `:` emoji, `::` symbols, `:?` favorites | **AGPL-3.0** | yes | Best-engineered reference. https://github.com/wr/mojito |
 | **Swiftmoji** (amitskr) | menu-bar app, Swift | `\\` (double backslash) default | unlicensed | yes | Small, readable, naive in places. https://github.com/amitskr/Swiftmoji |
 | **FujiMoji** (RickLiu1203) | menu-bar app, Swift | `/name/` (start/end keys configurable), popup after 2+ chars | **MIT** | yes | Uses paste-with-restore. https://github.com/RickLiu1203/FujiMoji |
 | **Comoji** | menu-bar app | `:` (swappable: `; / \ @ # ~ \|`) | closed (free) | yes | Tab inserts. Per-app/site disable. https://www.comoji.io/ |
@@ -36,7 +36,7 @@ Sources: https://matthewpalmer.net/rocket/ · https://matthewpalmer.net/rocket/h
 UX (documented):
 - Type `:` then the start of a name (`:thu`), popup appears, **Return** inserts (Verge: "Enter a colon … type its name, and hit enter again to insert"; Lifehacker: "tap the Return key when you have the emoji you want").
 - Trigger key is a single punctuation char, user-configurable; author: "`:`, `(`, and `+` work best". The help page mentions a **"double key" trigger** setting (exact semantics not documented; Mojito's later `::`/`:::` and Swiftmoji's `\\` double-trigger suggest "type the trigger twice") **[INFERENCE]**.
-- Free: skin-tone pick, light/dark themes, "access to every emoji through the shortcut window". Pro: browse/search window, gifs/images, custom shortcuts, snippets with `{{ date_short }}`-style variables, usage stats.
+- Free: skin-tone pick, light/dark themes, "access to every emoji through the shortcut window". Pro: browse/search window, images, custom shortcuts, snippets with `{{ date_short }}`-style variables, usage stats.
 - **Per-app disable list** (matches by process name — VS Code appears as "Electron", IntelliJ as "idea", must be hand-renamed) and **per-website disable** (Trello/GitHub/Slack) by asking the active browser for its URL **via AppleScript** (needs Automation + Finder + System Events consent on Mojave+). Hidden "chrome-devtools" disabled-site hack.
 - Failure mode the author documents: "macOS will stop delivering messages to Rocket" (tap silently dead) → fix is remove from Accessibility, reboot, re-add. Other-cause list: apps holding **secure input** (Keybase, LastPass, Bitwarden), wrong keyboard layout vs trigger key, VMs, SMC/NVRAM reset. This is the real-world cost of a CGEventTap app; Colon must detect and surface it (see §3.1, §3.6).
 
