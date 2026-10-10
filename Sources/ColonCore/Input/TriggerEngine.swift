@@ -7,6 +7,8 @@ public enum KeyInput: Equatable, Sendable {
     case backspace
     case up, down, left, right
     case enter, tab, escape
+    /// ⌘↩: insert the selection and keep the picker open (multi-insert).
+    case commandEnter
     /// Anything that should silently end tracking: ⌘/⌃ shortcuts, mouse click, app switch, unknown keys.
     case interrupt
 }
@@ -25,6 +27,12 @@ public struct TriggerResult: Equatable, Sendable {
         case commitSelection(deleteCount: Int)
         /// Insert this exact shortcode's emoji (closing-trigger auto replace, e.g. `:joy:`).
         case commitShortcode(String, deleteCount: Int)
+        /// Insert the selected suggestion and keep the picker open for another pick (⌘↩).
+        /// The first one deletes trigger + query; later ones delete nothing.
+        case commitSelectionKeepOpen(deleteCount: Int)
+        /// `<trigger>gif` + space: delete the `deleteCount` typed characters (the space was
+        /// swallowed) and open GIF search.
+        case openGIFSearch(deleteCount: Int)
     }
 
     public var action: Action
@@ -56,11 +64,25 @@ public struct TriggerEngine: Sendable {
     public var autoReplaceOnClosingTrigger: Bool
     /// Returns true if a shortcode exists (used for closing-trigger auto replace).
     public var shortcodeExists: @Sendable (String) -> Bool
+    /// The bare trigger shows the picker with recents (`.show(query: "")`). Picker keys that would
+    /// also be meaningful to the app (Enter, Tab, Esc, ⌘↩) stay with the app on an empty query
+    /// until the user moves the selection, so `a :⏎` is still a newline.
+    public var showsRecentsOnTrigger: Bool
+    /// Compact (horizontal) picker: ←/→ move the selection while it is visible instead of hiding it.
+    public var horizontalLayout: Bool
+    /// `<trigger>gif` + space opens GIF search.
+    public var gifSearchEnabled: Bool
 
     /// Whether the picker is currently shown (input layer reports back what the UI did).
     public private(set) var isShowing = false
-    /// Current query (after the trigger), nil when not tracking.
+    /// Current query (after the trigger), nil when not tracking. While multi-inserting it keeps
+    /// the query the picker was opened for, although that text is no longer in the app.
     public private(set) var query: String?
+    /// True after a ⌘↩ insert while the picker stays open; the `:query` has been replaced, so
+    /// nothing typed is pending in the app.
+    public private(set) var isMultiInserting = false
+    /// The user moved the highlight for the current query (arrow keys).
+    public private(set) var selectionMoved = false
 
     /// True when the character before the caret is a word boundary (or unknown, e.g. after a
     /// focus change), i.e. a trigger typed now would start a query.
@@ -71,11 +93,18 @@ public struct TriggerEngine: Sendable {
     /// they reached the app, so they count towards deletion).
     private var closingProgress = 0
 
+    /// Keyword typed after the trigger that, followed by a space, opens GIF search.
+    public static let gifKeyword = "gif"
+
     public init(trigger: String = ":", minQueryLength: Int = 2, autoReplaceOnClosingTrigger: Bool = true,
+                showsRecentsOnTrigger: Bool = false, horizontalLayout: Bool = false, gifSearchEnabled: Bool = false,
                 shortcodeExists: @escaping @Sendable (String) -> Bool = { _ in false }) {
         self.trigger = trigger.isEmpty ? ":" : trigger
         self.minQueryLength = max(0, minQueryLength)
         self.autoReplaceOnClosingTrigger = autoReplaceOnClosingTrigger
+        self.showsRecentsOnTrigger = showsRecentsOnTrigger
+        self.horizontalLayout = horizontalLayout
+        self.gifSearchEnabled = gifSearchEnabled
         self.shortcodeExists = shortcodeExists
     }
 
@@ -86,6 +115,7 @@ public struct TriggerEngine: Sendable {
     /// closing trigger), nil when not tracking. Used when the user picks with the mouse.
     public var typedLength: Int? {
         guard let query else { return nil }
+        if isMultiInserting { return 0 }
         return trigger.count + query.count + closingProgress
     }
 
@@ -94,11 +124,20 @@ public struct TriggerEngine: Sendable {
     ///   (↑ ↓ Enter Tab Esc) are swallowed only when this is true and the engine is showing;
     ///   otherwise they pass through to the app.
     public mutating func handle(_ input: KeyInput, pickerVisible: Bool) -> TriggerResult {
+        if isMultiInserting {
+            return handleMultiInsert(input, pickerVisible: pickerVisible)
+        }
         let wasShowing = isShowing
         let ownsPickerKeys = pickerVisible && isShowing
+        // On the bare trigger (recents), keys that also mean something to the app stay with the app
+        // until the user has engaged with the picker by moving the selection.
+        let ownsCommitKeys = ownsPickerKeys && (query?.isEmpty == false || selectionMoved)
         switch input {
         case .text(let text):
             let characters = Array(text)
+            if characters.count == 1, let gif = gifTrigger(characters[0]) {
+                return gif
+            }
             for (index, character) in characters.enumerated() {
                 // A commit is only honoured for a single typed character: with composed multi-char
                 // input we cannot swallow part of the event.
@@ -114,17 +153,22 @@ public struct TriggerEngine: Sendable {
 
         case .up, .down:
             if ownsPickerKeys {
+                selectionMoved = true
                 return TriggerResult(.moveSelection(input == .down ? 1 : -1), swallow: true)
             }
             caretMoved()
             return visibilityResult(wasShowing: wasShowing)
 
         case .left, .right:
+            if ownsPickerKeys && horizontalLayout {
+                selectionMoved = true
+                return TriggerResult(.moveSelection(input == .right ? 1 : -1), swallow: true)
+            }
             caretMoved()
             return visibilityResult(wasShowing: wasShowing)
 
         case .enter, .tab:
-            if ownsPickerKeys, let query {
+            if ownsCommitKeys, let query {
                 let count = trigger.count + query.count
                 endTracking(boundary: true)
                 return TriggerResult(.commitSelection(deleteCount: count), swallow: true)
@@ -132,8 +176,20 @@ public struct TriggerEngine: Sendable {
             endTracking(boundary: true)
             return visibilityResult(wasShowing: wasShowing)
 
+        case .commandEnter:
+            if ownsCommitKeys, let query {
+                let count = trigger.count + query.count
+                isMultiInserting = true
+                closingProgress = 0
+                triggerProgress = 0
+                return TriggerResult(.commitSelectionKeepOpen(deleteCount: count), swallow: true)
+            }
+            // A ⌘ shortcut like any other: the capture ends silently.
+            reset()
+            return visibilityResult(wasShowing: wasShowing)
+
         case .escape:
-            if ownsPickerKeys {
+            if ownsCommitKeys {
                 // Text stays; the caret now follows a query character.
                 endTracking(boundary: false)
                 return TriggerResult(.hide, swallow: true)
@@ -148,10 +204,41 @@ public struct TriggerEngine: Sendable {
         }
     }
 
+    /// After a ⌘↩ the picker stays open with nothing pending in the app: ⌘↩ inserts again, Enter/Tab
+    /// insert one more and close, Esc closes, the selection keys still move, and any other key closes
+    /// the picker and is handled as ordinary typing right after an emoji (a word boundary).
+    private mutating func handleMultiInsert(_ input: KeyInput, pickerVisible: Bool) -> TriggerResult {
+        if pickerVisible {
+            switch input {
+            case .commandEnter:
+                return TriggerResult(.commitSelectionKeepOpen(deleteCount: 0), swallow: true)
+            case .enter, .tab:
+                endTracking(boundary: true)
+                return TriggerResult(.commitSelection(deleteCount: 0), swallow: true)
+            case .escape:
+                endTracking(boundary: true)
+                return TriggerResult(.hide, swallow: true)
+            case .up, .down:
+                return TriggerResult(.moveSelection(input == .down ? 1 : -1), swallow: true)
+            case .left where horizontalLayout, .right where horizontalLayout:
+                return TriggerResult(.moveSelection(input == .right ? 1 : -1), swallow: true)
+            default:
+                break
+            }
+        }
+        // Close, then treat the key as if typed right after the inserted emoji.
+        endTracking(boundary: true)
+        var result = handle(input, pickerVisible: false)
+        if result.action == .none { result.action = .hide }
+        return result
+    }
+
     /// Forget everything (focus change, picker dismissed by mouse, etc.).
     public mutating func reset() {
         isShowing = false
         query = nil
+        isMultiInserting = false
+        selectionMoved = false
         triggerProgress = 0
         closingProgress = 0
         atBoundary = true
@@ -169,6 +256,7 @@ public struct TriggerEngine: Sendable {
             }
             if Self.isQueryCharacter(character), current.count < Self.maxQueryLength {
                 query = current + String(character)
+                selectionMoved = false
             } else {
                 endTracking(boundary: isBoundary(character))
             }
@@ -225,6 +313,7 @@ public struct TriggerEngine: Sendable {
                 closingProgress -= 1
             } else if !current.isEmpty {
                 query = String(current.dropLast())
+                selectionMoved = false
             } else {
                 // Deleted the last trigger character: back to a partial trigger at a boundary.
                 query = nil
@@ -246,6 +335,8 @@ public struct TriggerEngine: Sendable {
     /// The caret moved to an unknown position (arrow keys).
     private mutating func caretMoved() {
         query = nil
+        isMultiInserting = false
+        selectionMoved = false
         isShowing = false
         triggerProgress = 0
         closingProgress = 0
@@ -254,12 +345,16 @@ public struct TriggerEngine: Sendable {
 
     private mutating func beginTracking() {
         query = ""
+        isMultiInserting = false
+        selectionMoved = false
         triggerProgress = 0
         closingProgress = 0
     }
 
     private mutating func endTracking(boundary: Bool) {
         query = nil
+        isMultiInserting = false
+        selectionMoved = false
         isShowing = false
         triggerProgress = 0
         closingProgress = 0
@@ -268,12 +363,22 @@ public struct TriggerEngine: Sendable {
 
     /// Converts the post-transition state into show/hide/none.
     private mutating func visibilityResult(wasShowing: Bool) -> TriggerResult {
-        if let query, closingProgress == 0, query.count >= minQueryLength {
+        if let query, closingProgress == 0, query.count >= minQueryLength || (query.isEmpty && showsRecentsOnTrigger) {
             isShowing = true
             return TriggerResult(.show(query: query))
         }
         isShowing = false
         return TriggerResult(wasShowing ? .hide : .none)
+    }
+
+    /// `<trigger>gif` followed by a typed space opens GIF search. The space is swallowed, so only
+    /// trigger + keyword reached the app. `:gifs` and `:gif:` stay ordinary.
+    private mutating func gifTrigger(_ character: Character) -> TriggerResult? {
+        guard gifSearchEnabled, character == " ", closingProgress == 0,
+              let query, query.lowercased() == Self.gifKeyword else { return nil }
+        let deleteCount = trigger.count + query.count
+        endTracking(boundary: true)
+        return TriggerResult(.openGIFSearch(deleteCount: deleteCount), swallow: true)
     }
 
     // MARK: - Character classes

@@ -497,6 +497,434 @@ final class TriggerEngineTests: XCTestCase {
     }
 }
 
+final class TriggerEngineV04Tests: XCTestCase {
+    private let shortcodes: Set<String> = ["joy", "smile", "gift"]
+
+    private func makeEngine(trigger: String = ":", minQueryLength: Int = 2, recents: Bool = true,
+                            horizontal: Bool = false, gif: Bool = true) -> TriggerEngine {
+        let known = shortcodes
+        return TriggerEngine(trigger: trigger, minQueryLength: minQueryLength, autoReplaceOnClosingTrigger: true,
+                             showsRecentsOnTrigger: recents, horizontalLayout: horizontal, gifSearchEnabled: gif,
+                             shortcodeExists: { known.contains($0) })
+    }
+
+    @discardableResult
+    private func type(_ text: String, into engine: inout TriggerEngine) -> TriggerResult {
+        var last = TriggerResult(.none)
+        for character in text { last = engine.feed(.text(String(character))) }
+        return last
+    }
+
+    // MARK: Recents strip
+
+    func testBareTriggerShowsRecents() {
+        var engine = makeEngine()
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.show(query: "")))
+        XCTAssertTrue(engine.isShowing)
+        XCTAssertEqual(engine.query, "")
+    }
+
+    func testBareTriggerWithRecentsOffWaitsForMinimum() {
+        var engine = makeEngine(recents: false)
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.none))
+        XCTAssertEqual(type("j", into: &engine), TriggerResult(.none))
+        XCTAssertEqual(type("o", into: &engine), TriggerResult(.show(query: "jo")))
+    }
+
+    func testRecentsOnlyAtBoundary() {
+        for text in ["Time:", "http:", "12:", "std:"] {
+            var engine = makeEngine()
+            XCTAssertEqual(type(text, into: &engine), TriggerResult(.none), text)
+            XCTAssertFalse(engine.isShowing, text)
+        }
+    }
+
+    func testTimeColonEnterPassesThrough() {
+        var engine = makeEngine()
+        type("Time:", into: &engine)
+        let result = engine.handle(.enter, pickerVisible: true)
+        XCTAssertFalse(result.swallow)
+        XCTAssertEqual(result.action, .none)
+    }
+
+    func testSpaceColonEnterNeverSwallowed() {
+        for key: KeyInput in [.enter, .tab, .escape, .commandEnter] {
+            var engine = makeEngine()
+            type("a :", into: &engine)
+            XCTAssertTrue(engine.isShowing)
+            let result = engine.handle(key, pickerVisible: true)
+            XCTAssertFalse(result.swallow, "\(key)")
+            XCTAssertEqual(result.action, .hide, "\(key)")
+            XCTAssertNil(engine.query, "\(key)")
+        }
+    }
+
+    func testBareTriggerThenSpaceHidesAndPassesSpace() {
+        var engine = makeEngine()
+        type("a :", into: &engine)
+        let result = engine.feed(.text(" "))
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(result.swallow)
+        XCTAssertNil(engine.query)
+        // The space is a boundary: a new trigger opens again.
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.show(query: "")))
+    }
+
+    func testBareTriggerThenPunctuationHides() {
+        for text in [")", "(", "/", "."] {
+            var engine = makeEngine()
+            type(":", into: &engine)
+            let result = engine.feed(.text(text))
+            XCTAssertEqual(result, TriggerResult(.hide), text)
+            XCTAssertFalse(result.swallow, text)
+        }
+    }
+
+    func testBareTriggerContinuesIntoQuery() {
+        var engine = makeEngine()
+        type(":", into: &engine)
+        // Below the minimum the strip hides until the query is long enough.
+        XCTAssertEqual(type("j", into: &engine), TriggerResult(.hide))
+        XCTAssertEqual(type("o", into: &engine), TriggerResult(.show(query: "jo")))
+        // Backspacing back to the bare trigger brings the strip back.
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.hide))
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.show(query: "")))
+    }
+
+    func testBareTriggerContinuesIntoQueryWithMinimumOne() {
+        var engine = makeEngine(minQueryLength: 1)
+        type(":", into: &engine)
+        XCTAssertEqual(type("j", into: &engine), TriggerResult(.show(query: "j")))
+        // Enter on a real query commits as before.
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 2), swallow: true))
+    }
+
+    func testArrowThenEnterInsertsRecent() {
+        var engine = makeEngine()
+        type(":", into: &engine)
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertTrue(engine.selectionMoved)
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
+        XCTAssertNil(engine.query)
+    }
+
+    func testArrowThenTabEscAndCommandEnterBelongToPicker() {
+        var engine = makeEngine()
+        type(":", into: &engine)
+        _ = engine.feed(.up)
+        XCTAssertEqual(engine.feed(.tab), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
+
+        engine = makeEngine()
+        type(":", into: &engine)
+        _ = engine.feed(.down)
+        XCTAssertEqual(engine.feed(.escape), TriggerResult(.hide, swallow: true))
+
+        engine = makeEngine()
+        type(":", into: &engine)
+        _ = engine.feed(.down)
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 1), swallow: true))
+    }
+
+    func testMultiCharTriggerRecentsDeleteCount() {
+        var engine = makeEngine(trigger: "::")
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.none))
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.show(query: "")))
+        _ = engine.feed(.down)
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 2), swallow: true))
+    }
+
+    func testTypingAfterArrowResetsSelectionMoved() {
+        var engine = makeEngine(minQueryLength: 1)
+        type(":", into: &engine)
+        _ = engine.feed(.down)
+        type("j", into: &engine)
+        XCTAssertFalse(engine.selectionMoved)
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.show(query: "")))
+        // Back on the bare trigger, Enter belongs to the app again until the user arrows.
+        XCTAssertFalse(engine.feed(.enter).swallow)
+    }
+
+    func testBareTriggerArrowsPassThroughWhenPickerNotVisible() {
+        var engine = makeEngine()
+        type(":", into: &engine)
+        let result = engine.handle(.down, pickerVisible: false)
+        XCTAssertFalse(result.swallow)
+        XCTAssertEqual(result.action, .hide)
+    }
+
+    // MARK: Multi-insert
+
+    func testCommandEnterThreeTimesThenEnterInsertsFour() {
+        var engine = makeEngine()
+        type(" :joy", into: &engine)
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 4), swallow: true))
+        XCTAssertTrue(engine.isMultiInserting)
+        XCTAssertTrue(engine.isShowing)
+        XCTAssertEqual(engine.typedLength, 0)
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 0), swallow: true))
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 0), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 0), swallow: true))
+        XCTAssertFalse(engine.isMultiInserting)
+        XCTAssertFalse(engine.isShowing)
+        XCTAssertNil(engine.query)
+    }
+
+    func testTabAfterKeepOpenInsertsOneMoreAndCloses() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        XCTAssertEqual(engine.feed(.tab), TriggerResult(.commitSelection(deleteCount: 0), swallow: true))
+        XCTAssertNil(engine.query)
+    }
+
+    func testEscapeAfterKeepOpenCloses() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        XCTAssertEqual(engine.feed(.escape), TriggerResult(.hide, swallow: true))
+        XCTAssertNil(engine.query)
+        XCTAssertFalse(engine.isMultiInserting)
+    }
+
+    func testArrowsStillMoveDuringMultiInsert() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.up), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertTrue(engine.isMultiInserting)
+        // ←/→ only move in the compact layout.
+        let result = engine.feed(.left)
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(engine.isMultiInserting)
+    }
+
+    func testCompactArrowsMoveDuringMultiInsert() {
+        var engine = makeEngine(horizontal: true)
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.left), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertTrue(engine.isMultiInserting)
+    }
+
+    func testOtherKeyAfterKeepOpenClosesAndPassesThrough() {
+        for key: KeyInput in [.text("a"), .text(" "), .backspace, .interrupt, .text("😂")] {
+            var engine = makeEngine()
+            type(":joy", into: &engine)
+            _ = engine.feed(.commandEnter)
+            let result = engine.feed(key)
+            XCTAssertEqual(result, TriggerResult(.hide), "\(key)")
+            XCTAssertFalse(result.swallow, "\(key)")
+            XCTAssertFalse(engine.isMultiInserting, "\(key)")
+            XCTAssertNil(engine.query, "\(key)")
+        }
+    }
+
+    func testTriggerAfterKeepOpenStartsNewCapture() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        // Right after an emoji is a boundary.
+        XCTAssertEqual(engine.feed(.text(":")), TriggerResult(.show(query: "")))
+        XCTAssertFalse(engine.isMultiInserting)
+        XCTAssertEqual(engine.query, "")
+        type("smile", into: &engine)
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 6), swallow: true))
+    }
+
+    func testKeepOpenWithoutVisiblePickerPassesThrough() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        // The list emptied or the panel went away: keys belong to the app again.
+        for key: KeyInput in [.enter, .commandEnter, .down] {
+            var copy = engine
+            let result = copy.handle(key, pickerVisible: false)
+            XCTAssertFalse(result.swallow, "\(key)")
+            XCTAssertEqual(result.action, .hide, "\(key)")
+            XCTAssertNil(copy.query, "\(key)")
+        }
+    }
+
+    func testCommandEnterNotTrackingPassesThrough() {
+        var engine = makeEngine()
+        type("hello", into: &engine)
+        let result = engine.handle(.commandEnter, pickerVisible: true)
+        XCTAssertEqual(result, TriggerResult(.none))
+        XCTAssertFalse(result.swallow)
+    }
+
+    func testCommandEnterWithoutVisiblePickerEndsCapture() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        let result = engine.handle(.commandEnter, pickerVisible: false)
+        XCTAssertFalse(result.swallow)
+        XCTAssertEqual(result.action, .hide)
+        XCTAssertNil(engine.query)
+    }
+
+    func testMultiCharTriggerKeepOpenDeleteCounts() {
+        var engine = makeEngine(trigger: ";;")
+        type(";;smile", into: &engine)
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 7), swallow: true))
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 0), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 0), swallow: true))
+    }
+
+    func testResetEndsMultiInsert() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        engine.reset()
+        XCTAssertFalse(engine.isMultiInserting)
+        XCTAssertNil(engine.typedLength)
+    }
+
+    // MARK: Compact layout
+
+    func testCompactArrowsMoveOnlyWhileVisible() {
+        var engine = makeEngine(horizontal: true)
+        type(":joy", into: &engine)
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.left), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.query, "joy")
+
+        let hidden = engine.handle(.left, pickerVisible: false)
+        XCTAssertFalse(hidden.swallow)
+        XCTAssertEqual(hidden.action, .hide)
+        XCTAssertNil(engine.query)
+    }
+
+    func testCompactArrowsBelowMinimumPassThrough() {
+        var engine = makeEngine(minQueryLength: 3, recents: false, horizontal: true)
+        type(":jo", into: &engine)
+        // Stale "visible" from the UI does not matter while the engine is not showing.
+        let result = engine.handle(.right, pickerVisible: true)
+        XCTAssertFalse(result.swallow)
+        XCTAssertNil(engine.query)
+    }
+
+    func testCompactArrowsNotTrackingPassThrough() {
+        var engine = makeEngine(horizontal: true)
+        type("hello", into: &engine)
+        for key: KeyInput in [.left, .right] {
+            XCTAssertFalse(engine.handle(key, pickerVisible: true).swallow)
+        }
+    }
+
+    func testListLayoutArrowsHide() {
+        var engine = makeEngine(horizontal: false)
+        type(":joy", into: &engine)
+        let result = engine.feed(.right)
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(result.swallow)
+    }
+
+    func testCompactArrowOnBareTriggerEngagesPicker() {
+        var engine = makeEngine(horizontal: true)
+        type("a :", into: &engine)
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
+    }
+
+    func testLayoutCanChangeMidCapture() {
+        var engine = makeEngine(horizontal: false)
+        type(":joy", into: &engine)
+        engine.horizontalLayout = true
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.query, "joy")
+    }
+
+    // MARK: GIF search
+
+    func testGifSpaceOpensGIFSearch() {
+        var engine = makeEngine()
+        type("lol :gif", into: &engine)
+        let result = engine.feed(.text(" "))
+        XCTAssertEqual(result, TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+        XCTAssertNil(engine.query)
+        XCTAssertFalse(engine.isShowing)
+    }
+
+    func testGifSpaceIgnoresPickerVisibility() {
+        for visible in [false, true] {
+            var engine = makeEngine()
+            type(":gif", into: &engine)
+            XCTAssertEqual(engine.handle(.text(" "), pickerVisible: visible),
+                           TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+        }
+    }
+
+    func testGifUppercase() {
+        var engine = makeEngine()
+        type(":GIF", into: &engine)
+        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+    }
+
+    func testGifMultiCharTriggerDeleteCount() {
+        var engine = makeEngine(trigger: "::")
+        type("::gif", into: &engine)
+        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 5), swallow: true))
+    }
+
+    func testGifDisabledIsOrdinaryQuery() {
+        var engine = makeEngine(gif: false)
+        type(":gif", into: &engine)
+        let result = engine.feed(.text(" "))
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(result.swallow)
+    }
+
+    func testGifRequiresBoundary() {
+        for text in ["a:gif", "12:gif", "http:gif", "std::gif"] {
+            var engine = makeEngine()
+            type(text, into: &engine)
+            let result = engine.feed(.text(" "))
+            XCTAssertFalse(result.swallow, text)
+            if case .openGIFSearch = result.action { XCTFail("GIF search after \(text)") }
+        }
+    }
+
+    func testGifsIsNormalQuery() {
+        var engine = makeEngine()
+        XCTAssertEqual(type(":gifs", into: &engine), TriggerResult(.show(query: "gifs")))
+        let result = engine.feed(.text(" "))
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(result.swallow)
+    }
+
+    func testGifOnlyOnSpace() {
+        var engine = makeEngine()
+        type(":gif", into: &engine)
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 4), swallow: true))
+
+        engine = makeEngine()
+        type(":gif", into: &engine)
+        XCTAssertEqual(engine.feed(.text("\t")), TriggerResult(.hide))
+
+        engine = makeEngine()
+        type(":gif", into: &engine)
+        // Composed multi-character input cannot be partially swallowed.
+        let composed = engine.feed(.text(" x"))
+        XCTAssertFalse(composed.swallow)
+    }
+
+    func testGifAfterBackspaceEdit() {
+        var engine = makeEngine()
+        type(":gift", into: &engine)
+        _ = engine.feed(.backspace)
+        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+    }
+
+    func testGifShortcodeClosingTriggerStillWorks() {
+        var engine = makeEngine()
+        type(":gift", into: &engine)
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.commitShortcode("gift", deleteCount: 5), swallow: true))
+    }
+}
+
 private extension TriggerEngine {
     /// Feeds a key with the picker visible exactly when the engine wants it shown (the UI kept up).
     mutating func feed(_ input: KeyInput) -> TriggerResult {

@@ -12,6 +12,9 @@ protocol InputControllerDelegate: AnyObject {
     func inputMoveSelection(by delta: Int)
     /// Return the emoji string to insert for the current selection, or nil to just close.
     func inputCommitSelection() -> String?
+    /// ⌘↩: return the emoji string for the current selection and record its use, but keep the
+    /// picker open for another pick. nil when there is no selection.
+    func inputCommitSelectionKeepOpen() -> String?
     /// Return the emoji string for an exact shortcode (closing-trigger auto replace), nil if unknown.
     func inputCommit(shortcode: String) -> String?
     /// Whether a Cocoa screen point lies inside the picker (a click there is a pick, not an interrupt).
@@ -19,6 +22,8 @@ protocol InputControllerDelegate: AnyObject {
     /// The picker is on screen with a selectable row (`picker.isVisible && picker.selectedSuggestion != nil`).
     /// Picker keys are swallowed only while this is true.
     func inputPickerIsVisible() -> Bool
+    /// `<trigger>gif` + space: the typed text has been deleted; open GIF search for the frontmost app.
+    func inputOpenGIFSearch(context: PredictionContext)
 }
 
 /// Owns the CGEventTap, runs `TriggerEngine`, honours exclusions/secure input,
@@ -45,6 +50,9 @@ final class InputController: ObservableObject {
             trigger: AppSettings.isValidTrigger(settings.triggerString) ? settings.triggerString : ":",
             minQueryLength: settings.minQueryLength,
             autoReplaceOnClosingTrigger: settings.autoReplaceOnClosingTrigger,
+            showsRecentsOnTrigger: settings.showRecentsOnTrigger,
+            horizontalLayout: settings.pickerLayout == .compact,
+            gifSearchEnabled: settings.gifSearchEnabled,
             shortcodeExists: { EmojiStore.shared.emoji(forShortcode: $0) != nil }
         )
     }
@@ -86,6 +94,8 @@ final class InputController: ObservableObject {
     /// A capture with no keystroke for this long is abandoned.
     private static let idleTimeout: TimeInterval = 10
     private static let healthInterval: TimeInterval = 2
+    /// Lets the deletion of `:gif` reach the target app before the GIF panel takes the keyboard.
+    private static let gifOpenDelay: TimeInterval = 0.08
 
     // MARK: Lifecycle
 
@@ -280,7 +290,13 @@ final class InputController: ObservableObject {
         // Picker keys belong to the picker only while it is on screen with a row to pick: we have
         // shown it (the focus probe may still be running) and the UI confirms a selection.
         let visible = pickerVisible && (delegate?.inputPickerIsVisible() ?? false)
+        let wasMultiInserting = engine.isMultiInserting
         let result = engine.handle(input, pickerVisible: visible)
+        if wasMultiInserting, !engine.isMultiInserting, !result.swallow {
+            // A key that closes multi-insert ends that capture (a fresh trigger starts a new one,
+            // anchored where it is typed).
+            endCapture(notifyDelegate: true)
+        }
         switch result.action {
         case .none:
             break
@@ -296,6 +312,12 @@ final class InputController: ObservableObject {
             return nil
         case .commitShortcode(let shortcode, let deleteCount):
             commit(shortcode: shortcode, deleteCount: deleteCount, key: event, proxy: proxy)
+            return nil
+        case .commitSelectionKeepOpen(let deleteCount):
+            commitSelectionKeepOpen(deleteCount: deleteCount, key: event, proxy: proxy)
+            return nil
+        case .openGIFSearch(let deleteCount):
+            openGIFSearch(deleteCount: deleteCount, proxy: proxy)
             return nil
         }
         if engine.isTracking { scheduleIdleTimeout() } else { cancelIdleTimeout() }
@@ -314,6 +336,39 @@ final class InputController: ObservableObject {
         }
         InputLog.debug("commit selection, deleteCount \(deleteCount)")
         Inserter.replace(deleteCount: deleteCount, with: text, method: settings.insertionMethod, poster: .tap(proxy))
+    }
+
+    /// ⌘↩ was swallowed: insert the selection and leave the picker up for the next pick. Without a
+    /// selection the capture ends and the key is delivered after all.
+    private func commitSelectionKeepOpen(deleteCount: Int, key: CGEvent, proxy: CGEventTapProxy) {
+        guard let text = delegate?.inputCommitSelectionKeepOpen() else {
+            InputLog.debug("keep-open commit with no selection, re-posting key")
+            resetCapture()
+            repost(key, proxy: proxy)
+            return
+        }
+        InputLog.debug("commit selection (keep open), deleteCount \(deleteCount)")
+        Inserter.replace(deleteCount: deleteCount, with: text, method: settings.insertionMethod, poster: .tap(proxy))
+        scheduleIdleTimeout()
+    }
+
+    /// `:gif` + space (swallowed): delete `:gif`, close the emoji picker and hand over to GIF search.
+    private func openGIFSearch(deleteCount: Int, proxy: CGEventTapProxy) {
+        let app = frontmostApp
+        var context = self.context
+        if context.appName == nil, context.bundleID == nil {
+            context = PredictionContext(appName: app?.localizedName, bundleID: app?.bundleIdentifier)
+        }
+        endCapture(notifyDelegate: true)
+        InputLog.debug("open GIF search, deleteCount \(deleteCount)")
+        // Pure deletion: backspaces work the same for both insertion methods.
+        Inserter.replace(deleteCount: deleteCount, with: "", method: .typing, poster: .tap(proxy))
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.gifOpenDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, NSWorkspace.shared.frontmostApplication == app else { return }
+                self.delegate?.inputOpenGIFSearch(context: context)
+            }
+        }
     }
 
     /// The closing trigger was swallowed: insert the shortcode's emoji, or re-post the trigger
@@ -354,8 +409,12 @@ final class InputController: ObservableObject {
     /// (a dead key waiting for its second press).
     private func translate(_ event: CGEvent) -> KeyInput? {
         let flags = event.flags
-        if flags.contains(.maskCommand) || flags.contains(.maskControl) { return .interrupt }
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        if flags.contains(.maskCommand), !flags.contains(.maskControl), !flags.contains(.maskAlternate),
+           !flags.contains(.maskShift), keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter {
+            return .commandEnter
+        }
+        if flags.contains(.maskCommand) || flags.contains(.maskControl) { return .interrupt }
         switch keyCode {
         case kVK_Delete:
             // ⌥⌫ deletes a word: we cannot follow that, so end the capture.
@@ -553,6 +612,12 @@ final class InputController: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.checkHealth() }
             .store(in: &cancellables)
+        // Read the emitted values: `@Published` publishes in willSet.
+        Publishers.CombineLatest3(settings.$showRecentsOnTrigger, settings.$pickerLayout, settings.$gifSearchEnabled)
+            .sink { [weak self] recents, layout, gif in
+                self?.configureFeatures(showsRecents: recents, horizontal: layout == .compact, gif: gif)
+            }
+            .store(in: &cancellables)
         settings.$excludedBundleIDs
             .sink { [weak self] excluded in
                 guard let self, let bundleID = self.frontmostApp?.bundleIdentifier,
@@ -584,6 +649,18 @@ final class InputController: ObservableObject {
         engine.minQueryLength = minQueryLength
         engine.autoReplaceOnClosingTrigger = autoReplace
         InputLog.debug("engine configured: trigger \(trigger), min \(minQueryLength), autoReplace \(autoReplace)")
+    }
+
+    /// Recents, layout and GIF switches change only how the next keys are read, so an open capture
+    /// keeps going (a layout switch applies to the very next arrow key).
+    private func configureFeatures(showsRecents: Bool, horizontal: Bool, gif: Bool) {
+        if showsRecents != engine.showsRecentsOnTrigger, engine.query?.isEmpty == true, !engine.isMultiInserting {
+            // The bare-trigger strip would appear or linger against the new setting.
+            resetCapture()
+        }
+        engine.showsRecentsOnTrigger = showsRecents
+        engine.horizontalLayout = horizontal
+        engine.gifSearchEnabled = gif
     }
 
     /// IMEs (Japanese, Chinese, …) compose text the tap cannot see; stay silent while one is active.

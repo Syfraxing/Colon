@@ -291,12 +291,95 @@ final class SuggestionEngineTests: XCTestCase {
         XCTAssertEqual(engine.output(for: store.emoji(id: "wave")!), "👋")
     }
 
-    func testEmptyQueryClears() {
+    // MARK: Recents strip (empty query)
+
+    private var popularIDs: [String] {
+        PopularEmoji.ids.filter { EmojiStore.shared.emoji(id: $0) != nil }
+    }
+
+    func testEmptyQueryWithoutHistoryShowsPopular() async {
+        let engine = makeEngine()
+        engine.update(query: "", context: PredictionContext(appName: "Notes"))
+        XCTAssertEqual(engine.suggestions.map(\.id), Array(popularIDs.prefix(SuggestionEngine.recentsLimit)))
+        XCTAssertFalse(engine.isRefining)
+        try? await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(jev.calls.isEmpty, "recents never ask Jev")
+    }
+
+    func testEmptyQueryPrefersMostUsedThenTopsUpWithPopular() {
+        let engine = makeEngine()
+        let store = EmojiStore.shared
+        let rocket = store.emoji(id: "rocket")!
+        let fire = store.emoji(id: "fire")!
+        for _ in 0..<3 { engine.recordUse(rocket) }
+        engine.recordUse(fire)
+        engine.update(query: "", context: PredictionContext())
+        let ids = engine.suggestions.map(\.id)
+        XCTAssertEqual(ids.count, SuggestionEngine.recentsLimit)
+        XCTAssertEqual(Array(ids.prefix(2)), ["rocket", "fire"])
+        XCTAssertEqual(Set(ids).count, ids.count, "no duplicates")
+        XCTAssertEqual(Array(ids.dropFirst(2)), Array(popularIDs.filter { $0 != "rocket" && $0 != "fire" }.prefix(6)))
+        // Scores descend in display order.
+        let scores = engine.suggestions.map(\.score)
+        XCTAssertEqual(scores, scores.sorted(by: >))
+    }
+
+    func testRecentsShowAtMostEightMostUsed() {
+        let engine = makeEngine()
+        let ids = Array(popularIDs.suffix(12))
+        for (index, id) in ids.enumerated() {
+            for _ in 0...index { engine.recordUse(EmojiStore.shared.emoji(id: id)!) }
+        }
+        engine.update(query: "", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.map(\.id), Array(ids.reversed().prefix(8)))
+    }
+
+    func testRecentsRespectMaxResults() {
+        settings.maxResults = 5
+        let engine = makeEngine()
+        engine.update(query: "", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.count, 5)
+    }
+
+    func testEmptyQueryAfterQueryShowsRecentsAndCancelsJev() async {
+        jev.answer("fire", ["fire": 0.9], after: .milliseconds(80))
         let engine = makeEngine()
         engine.update(query: "fire", context: PredictionContext())
         engine.update(query: "", context: PredictionContext())
-        XCTAssertEqual(engine.suggestions, [])
+        XCTAssertEqual(engine.query, "")
         XCTAssertFalse(engine.isRefining)
+        let recents = engine.suggestions
+        XCTAssertEqual(recents.map(\.id), Array(popularIDs.prefix(SuggestionEngine.recentsLimit)))
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(engine.suggestions, recents, "a stale answer must not replace the strip")
+    }
+
+    func testRecentsKeepOrderWhenFrozenAndContextArrives() {
+        let engine = makeEngine()
+        engine.update(query: "", context: PredictionContext())
+        let before = engine.suggestions
+        engine.freezeOrder()
+        engine.recordUse(EmojiStore.shared.emoji(id: before.last!.id)!)
+        engine.update(query: "", context: PredictionContext(appName: "Notes", bundleID: "com.apple.Notes"))
+        XCTAssertEqual(engine.suggestions, before)
+    }
+
+    func testRecentsRebuiltAfterReset() {
+        let engine = makeEngine()
+        engine.update(query: "", context: PredictionContext())
+        engine.freezeOrder()
+        engine.reset()
+        XCTAssertEqual(engine.suggestions, [])
+        engine.recordUse(EmojiStore.shared.emoji(id: "rocket")!)
+        engine.update(query: "", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.first?.id, "rocket")
+    }
+
+    func testTypingAfterRecentsSearchesNormally() {
+        let engine = makeEngine()
+        engine.update(query: "", context: PredictionContext())
+        engine.update(query: "fire", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.first?.id, "fire")
     }
 
     func testLRUCacheEvictsOldest() {

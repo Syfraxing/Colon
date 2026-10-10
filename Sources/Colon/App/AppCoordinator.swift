@@ -3,6 +3,12 @@ import Combine
 import ColonCore
 import KeyboardShortcuts
 
+extension Notification.Name {
+    /// Posted on the main thread when `<trigger>gif` + space asks for GIF search;
+    /// `userInfo["context"]` is the `PredictionContext` of the app being typed in.
+    static let colonOpenGIFSearch = Notification.Name("ColonOpenGIFSearch")
+}
+
 extension KeyboardShortcuts.Name {
     /// Opens the picker in search mode from anywhere. Default ⌃⌥⌘E (Ctrl-Option-Cmd-E).
     static let openPicker = Self("openPicker", default: .init(.e, modifiers: [.control, .option, .command]))
@@ -131,6 +137,17 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
         engine.recordUse(emoji)
         return engine.output(for: emoji)
+    }
+
+    func inputCommitSelectionKeepOpen() -> String? {
+        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
+        engine.recordUse(emoji)
+        return engine.output(for: emoji)
+    }
+
+    func inputOpenGIFSearch(context: PredictionContext) {
+        // GIF search lives in Colon/GIF; it observes this and opens its panel for the frontmost app.
+        NotificationCenter.default.post(name: .colonOpenGIFSearch, object: self, userInfo: ["context": context])
     }
 
     func inputCommit(shortcode: String) -> String? {
