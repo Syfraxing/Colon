@@ -32,6 +32,9 @@ public final class SuggestionEngine: ObservableObject {
     public nonisolated static let exactPinTolerance = 0.35
     /// Emoji only Jev proposed (no local match) need at least this probability to be shown.
     public nonisolated static let jevOnlyThreshold = 0.02
+    /// With no local match at all, Jev's top pick needs this probability before anything is shown,
+    /// so gibberish (`:zzqx` → top ≈ 0.2) leaves Enter native while slang (`:yeet` → 🚀 ≈ 0.67) still works.
+    public nonisolated static let noLocalMatchMinimumTop = 0.4
     static let localPoolSize = 40
     static let localCandidates = 24
     static let frecentCandidates = 16
@@ -225,6 +228,7 @@ public final class SuggestionEngine: ObservableObject {
         guard !probabilities.isEmpty else { return Array(local.prefix(limit)) }
         let bestLocal = local.first?.score ?? 0
         let bestJev = probabilities.values.max() ?? 0
+        if local.isEmpty && bestJev < noLocalMatchMinimumTop { return [] }
 
         var blended: [(suggestion: Suggestion, order: Int)] = []
         var seen = Set<String>()

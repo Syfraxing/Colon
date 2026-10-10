@@ -124,6 +124,16 @@ final class SuggestionEngineTests: XCTestCase {
         XCTAssertEqual(ids(engine), ["skull", "joy"])
     }
 
+    /// Measured live: gibberish spreads Jev's mass (`zzqx` top ≈ 0.21), so with no local match
+    /// nothing is shown and Enter stays native.
+    func testLowConfidenceJevOnlyResultsAreSuppressed() async {
+        jev.answer("zqxv", ["sleeping": 0.21, "zany_face": 0.06, "x": 0.04])
+        let engine = makeEngine()
+        engine.update(query: "zqxv", context: PredictionContext())
+        await waitUntil { !engine.isRefining }
+        XCTAssertEqual(engine.suggestions, [])
+    }
+
     func testExactShortcodeStaysPinnedWhenJevAgrees() async {
         jev.answer("fire", ["heart_on_fire": 0.6, "fire": 0.3])
         let engine = makeEngine()
