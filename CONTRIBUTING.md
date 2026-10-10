@@ -1,12 +1,12 @@
-# Contributing to Emojify
+# Contributing to Colon
 
 Thanks for helping make emoji on the Mac feel effortless.
 
 ## Getting started
 
 ```sh
-git clone https://github.com/Syfraxing/Emojify.git
-cd Emojify
+git clone https://github.com/Syfraxing/Colon.git
+cd Colon
 make test        # swift test
 make install     # build, copy to /Applications, launch
 ```
@@ -18,14 +18,14 @@ Sign builds with a stable identity: your Apple Development certificate, or any
 self-signed code-signing certificate (the build script picks it up automatically, or set
 `SIGN_IDENTITY`). macOS ties the Accessibility permission to the code signature, so with an
 ad-hoc signature you have to re-grant Accessibility after every rebuild
-(`tccutil reset Accessibility so.slayer.Emojify`).
+(`tccutil reset Accessibility so.slayer.Colon`).
 
 ## Ground rules
 
 - Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) first. It describes the data flow and
   the behaviour contract (trigger rules, privacy guarantees, picker spec).
-- Keep `swift build` and `swift test` green. Add tests for logic in `EmojifyCore`
-  (trigger parsing, search, ranking); UI and event-tap code lives in the `Emojify` target.
+- Keep `swift build` and `swift test` green. Add tests for logic in `ColonCore`
+  (trigger parsing, search, ranking); UI and event-tap code lives in the `Colon` target.
 - Privacy is a feature: never buffer typed text outside an active `:query`, never read
   secure fields, never log or persist the Jev API key (it lives only in the Keychain).
   Never commit keys or tokens, not even in tests; CI scans every commit and fails if it

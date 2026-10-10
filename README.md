@@ -1,28 +1,28 @@
 <div align="center">
 
-# Emojify
+# Colon
 
 **Slack-style `:emoji:` autocomplete in every Mac app.**
 
 Type `:haha` anywhere. A glass picker appears right at your caret. Press Enter and get 😂.
 
-[Download](https://github.com/Syfraxing/Emojify/releases/latest) ·
+[Download](https://github.com/Syfraxing/Colon/releases/latest) ·
 [Build from source](#build-from-source) ·
 [Architecture](docs/ARCHITECTURE.md)
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
-[![CI](https://github.com/Syfraxing/Emojify/actions/workflows/ci.yml/badge.svg)](https://github.com/Syfraxing/Emojify/actions/workflows/ci.yml)
+[![CI](https://github.com/Syfraxing/Colon/actions/workflows/ci.yml/badge.svg)](https://github.com/Syfraxing/Colon/actions/workflows/ci.yml)
 
-<img src="docs/screenshots/picker-dark.png" alt="The Emojify picker suggesting 😂 for :haha in a text editor" width="560">
+<img src="docs/screenshots/picker-dark.png" alt="The Colon picker suggesting 😂 for :haha in a text editor" width="560">
 
 </div>
 
-## Why Emojify
+## Why Colon
 
 Slack, Discord and GitHub taught your fingers to type `:tada:`. Then you open Mail, Notes,
-Messages or your editor, and nothing happens. Emojify brings that habit to the whole Mac:
+Messages or your editor, and nothing happens. Colon brings that habit to the whole Mac:
 it lives in the menu bar, stays out of the way, and turns `:shortcode` into emoji in any
 text field.
 
@@ -46,7 +46,7 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
   to search all emoji from anywhere, then click or press Enter to insert.
 - **Custom trigger.** Prefer `;` or `::`? Any one to three punctuation characters work;
   change it in Settings → General.
-- **Excluded apps.** Out of the box Emojify stays silent in apps that have their own
+- **Excluded apps.** Out of the box Colon stays silent in apps that have their own
   picker (Slack, Discord, Teams, Linear, Notion, GitHub Desktop), in terminals and code
   editors where `:` means something else (Terminal, iTerm2, Ghostty, Warp, VS Code, Xcode,
   Zed, Cursor), and in password managers (1Password, Bitwarden, Passwords, Keychain
@@ -68,43 +68,43 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 
 ## Install
 
-1. Download `Emojify-<version>.dmg` (or the `.zip`) from the
-   [latest release](https://github.com/Syfraxing/Emojify/releases/latest).
-2. Open it and drag **Emojify** into **Applications**.
+1. Download `Colon-<version>.dmg` (or the `.zip`) from the
+   [latest release](https://github.com/Syfraxing/Colon/releases/latest).
+2. Open it and drag **Colon** into **Applications**.
 3. **First launch.** Release builds are not notarized by Apple yet, so Gatekeeper refuses
    to open the app the first time. Pick one:
-   - **macOS 15 Sequoia and later:** open Emojify, click **Done** on the warning, then go to
-     **System Settings → Privacy & Security**, scroll down to *"Emojify" was blocked* and
+   - **macOS 15 Sequoia and later:** open Colon, click **Done** on the warning, then go to
+     **System Settings → Privacy & Security**, scroll down to *"Colon" was blocked* and
      click **Open Anyway**.
-   - **macOS 14 Sonoma:** right-click (or Control-click) Emojify in Applications, choose
+   - **macOS 14 Sonoma:** right-click (or Control-click) Colon in Applications, choose
      **Open**, then **Open** again.
    - **Any version:** remove the quarantine flag in Terminal:
      ```sh
-     xattr -dr com.apple.quarantine /Applications/Emojify.app
+     xattr -dr com.apple.quarantine /Applications/Colon.app
      ```
-4. **Grant Accessibility (and Input Monitoring if asked).** Emojify needs them to see your
+4. **Grant Accessibility (and Input Monitoring if asked).** Colon needs them to see your
    keystrokes and type the emoji. The onboarding window takes you to **System Settings →
    Privacy & Security → Accessibility** (and **Input Monitoring** on macOS versions that
-   require it); switch Emojify on and it starts working immediately. Install the app in
+   require it); switch Colon on and it starts working immediately. Install the app in
    Applications *before* granting, and don't move it afterwards.
 
-Emojify lives in the menu bar (there's no Dock icon). Click the menu bar icon for
+Colon lives in the menu bar (there's no Dock icon). Click the menu bar icon for
 Settings, the on/off toggle and Quit. Turn on **Launch at login** in Settings → General.
 
 > **Updating or stuck?** macOS ties the Accessibility permission to the app's signature,
-> and release builds are ad-hoc signed, so after installing a new release Emojify may show
-> "Accessibility permission needed" even though the switch looks on. Remove Emojify from
+> and release builds are ad-hoc signed, so after installing a new release Colon may show
+> "Accessibility permission needed" even though the switch looks on. Remove Colon from
 > the Accessibility list (−) and add it again, or reset the permission in Terminal and
 > grant it once more:
 > ```sh
-> tccutil reset Accessibility so.slayer.Emojify
+> tccutil reset Accessibility so.slayer.Colon
 > ```
-> If Emojify goes quiet everywhere, check the menu bar: *Paused — secure input* means
+> If Colon goes quiet everywhere, check the menu bar: *Paused — secure input* means
 > another app (often a password prompt or a terminal) has turned on macOS Secure Input.
 
 ## Jev ranking (bring your own key)
 
-Emojify works fully offline with local search. For semantic ranking, add a Jev key:
+Colon works fully offline with local search. For semantic ranking, add a Jev key:
 
 1. Get a key at [console.typesafe.ai](https://console.typesafe.ai).
 2. Click the menu bar icon → **Settings… → Jev**, paste the key, and press **Test**.
@@ -116,16 +116,16 @@ development; release builds read the Keychain only.
 
 ## Privacy
 
-Emojify needs Accessibility access, which is powerful, so here is exactly what it does
+Colon needs Accessibility access, which is powerful, so here is exactly what it does
 with it.
 
 **On your Mac**
-- Emojify watches keystrokes only to spot the trigger. Outside an active `:query` it
+- Colon watches keystrokes only to spot the trigger. Outside an active `:query` it
   keeps nothing: no buffer, no history, no log of what you type.
 - It is silent in secure text fields (passwords), whenever macOS Secure Input is on, while
   an input method (Japanese, Chinese, Korean…) is active, in excluded apps (password
   managers and terminals by default), and in its own windows.
-- Settings and emoji usage counts (for frecency) are stored locally in Emojify's
+- Settings and emoji usage counts (for frecency) are stored locally in Colon's
   preferences. Your Jev key is stored in the Keychain.
 
 **Sent to Jev** only when a key is set, **Use Jev** is on, and your query is at least two
@@ -138,26 +138,26 @@ contain:
   300 characters of the text right before the trigger, read from the focused field at that
   moment so suggestions fit the sentence. Never read from password fields.
 
-Nothing is sent when Jev is off or no key is set. Emojify has no analytics or telemetry,
+Nothing is sent when Jev is off or no key is set. Colon has no analytics or telemetry,
 and it never logs your keys, queries or typed text.
 
 ## Build from source
 
-Most people should just [download the release](https://github.com/Syfraxing/Emojify/releases/latest).
+Most people should just [download the release](https://github.com/Syfraxing/Colon/releases/latest).
 Building requires macOS 14+ and full **Xcode 16+** selected with `xcode-select` (Command Line
 Tools alone fail with `plugin for module 'PreviewsMacros' not found`).
 
 ```sh
-git clone https://github.com/Syfraxing/Emojify.git
-cd Emojify
+git clone https://github.com/Syfraxing/Colon.git
+cd Colon
 make install          # build, sign, copy to /Applications, launch
 ```
 
 | Command | What it does |
 | --- | --- |
-| `make app` | Universal (arm64 + x86_64) release build, signed, at `build/Emojify.app`. `NATIVE=1` builds for this Mac only. |
+| `make app` | Universal (arm64 + x86_64) release build, signed, at `build/Colon.app`. `NATIVE=1` builds for this Mac only. |
 | `make install` | `make app`, quit the running copy, install to `/Applications` (or `~/Applications`), launch. |
-| `make dmg` | Drag-to-install disk image at `dist/Emojify-<version>.dmg`. |
+| `make dmg` | Drag-to-install disk image at `dist/Colon-<version>.dmg`. |
 | `make test` | `swift test`. |
 | `make build` | Plain debug `swift build`. |
 | `make emoji-data` | Regenerate the bundled emoji dataset. |
@@ -170,13 +170,13 @@ variable if set; otherwise it uses your first *Developer ID Application* certifi
 self-signed certificate works), and falls back to ad-hoc signing. Use a certificate if you
 can: macOS ties the Accessibility permission to the signature's designated requirement,
 and an ad-hoc signature changes on every build, so you'd have to re-grant Accessibility
-(`tccutil reset Accessibility so.slayer.Emojify`) after each rebuild. Developer ID builds
+(`tccutil reset Accessibility so.slayer.Colon`) after each rebuild. Developer ID builds
 also get the hardened runtime and a secure timestamp.
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" make dmg
 SIGN_IDENTITY=- make app          # force ad-hoc
-EMOJIFY_VERSION=1.2.0 make app    # override the version string
+COLON_VERSION=1.2.0 make app    # override the version string
 ```
 
 **Releases.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests,
@@ -200,7 +200,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits & licenses
 
-- Emojify is released under the [MIT License](LICENSE). © 2026 Hunter Claycomb.
+- Colon is released under the [MIT License](LICENSE). © 2026 Hunter Claycomb.
 - [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) by Sindre Sorhus
   (MIT) powers the global hotkey and its recorder.
 - Emoji names and keywords come from Unicode emoji data; see

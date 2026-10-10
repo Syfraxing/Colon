@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Sources/EmojifyCore/Resources/emoji.json from upstream emoji datasets.
+"""Build Sources/ColonCore/Resources/emoji.json from upstream emoji datasets.
 
 Sources (all MIT licensed, pinned by version and SHA-256, see THIRD_PARTY_NOTICES.md):
   * github/gemoji         db/emoji.json              -> GitHub/Slack aliases + tags
@@ -83,7 +83,7 @@ GROUPS = {
 SKIPPED_GROUPS = {2}  # skin tone / hair components are not standalone emoji
 
 # Chat slang the upstream keyword sets miss, so local search alone handles everyday shortcuts.
-# Keyed by emoji; Emojify's own data (MIT, same as the project).
+# Keyed by emoji; Colon's own data (MIT, same as the project).
 SLANG = {
     "😂": ["lmao", "lmfao", "ded", "dying", "crying laughing", "hilarious"],
     "🤣": ["lmao", "lmfao", "rofl", "dying", "ded"],
@@ -197,7 +197,7 @@ def as_list(value):
 
 
 def toned_hexcode(hexcode, tone):
-    """Where Emojify inserts a skin tone: right after the first scalar, dropping its VS16."""
+    """Where Colon inserts a skin tone: right after the first scalar, dropping its VS16."""
     parts = hexcode.split("-")
     rest = parts[1:]
     if rest and rest[0] == VS16:
@@ -317,7 +317,7 @@ def main():
     parser.add_argument("--cache", help="directory for downloaded sources (reused when present)")
     parser.add_argument(
         "--out",
-        default=os.path.join(root, "Sources", "EmojifyCore", "Resources", "emoji.json"),
+        default=os.path.join(root, "Sources", "ColonCore", "Resources", "emoji.json"),
     )
     args = parser.parse_args()
 

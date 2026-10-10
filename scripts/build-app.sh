@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds build/Emojify.app from the SwiftPM package and code signs it.
+# Builds build/Colon.app from the SwiftPM package and code signs it.
 #
 # Usage: scripts/build-app.sh [--native] [--help]
 #
@@ -10,23 +10,23 @@
 #   SIGN_IDENTITY     Code signing identity (name or SHA-1). Defaults to the first
 #                     "Developer ID Application" identity, then the first
 #                     "Apple Development" identity, then any other valid
-#                     code-signing identity (e.g. a self-signed "Emojify Dev"
+#                     code-signing identity (e.g. a self-signed "Colon Dev"
 #                     certificate) in your keychain, else ad-hoc ("-").
 #                     Set SIGN_IDENTITY=- to force ad-hoc signing.
-#   EMOJIFY_VERSION   Overrides CFBundleShortVersionString (a leading "v" is stripped).
-#   EMOJIFY_BUILD     Overrides CFBundleVersion.
+#   COLON_VERSION   Overrides CFBundleShortVersionString (a leading "v" is stripped).
+#   COLON_BUILD     Overrides CFBundleVersion.
 #   BUILD_DIR         Output directory (default: <repo>/build).
 #
 # Why the signature matters: macOS ties the Accessibility permission (TCC) to the
 # app's code signature. A certificate-backed signature (Apple Development or
 # Developer ID) has a stable designated requirement, so the permission survives
 # rebuilds. An ad-hoc signature changes with every build, so after each rebuild you
-# must remove Emojify from System Settings > Privacy & Security > Accessibility and
+# must remove Colon from System Settings > Privacy & Security > Accessibility and
 # grant it again.
 #
 # Resource bundles: SwiftPM's generated `Bundle.module` accessor (Swift Build /
 # XCBuild flavour) looks in `Bundle.main.resourceURL` first, which for an app is
-# Contents/Resources. Both Emojify_EmojifyCore.bundle (emoji dataset) and
+# Contents/Resources. Both Colon_ColonCore.bundle (emoji dataset) and
 # KeyboardShortcuts_KeyboardShortcuts.bundle (recorder localizations) are copied
 # there. Older toolchains whose default "native" build system generates an accessor
 # that only checks the app root are switched to the Xcode build system, because
@@ -35,7 +35,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
-APP_NAME="Emojify"
+APP_NAME="Colon"
 APP="$BUILD_DIR/$APP_NAME.app"
 NATIVE=0
 
@@ -62,11 +62,11 @@ if [[ "$(xcode-select -p 2>/dev/null)" != *.app/Contents/Developer ]]; then
     if [[ -d /Applications/Xcode.app ]]; then
         die "the active developer directory is Command Line Tools ($(xcode-select -p 2>/dev/null)).
        Switch to Xcode:  sudo xcode-select -s /Applications/Xcode.app
-       Or skip building: download Emojify from https://github.com/Syfraxing/Emojify/releases/latest"
+       Or skip building: download Colon from https://github.com/Syfraxing/Colon/releases/latest"
     fi
-    die "building Emojify needs full Xcode (Command Line Tools are not enough).
+    die "building Colon needs full Xcode (Command Line Tools are not enough).
        Install Xcode from the App Store, or skip building and download the app:
-       https://github.com/Syfraxing/Emojify/releases/latest"
+       https://github.com/Syfraxing/Colon/releases/latest"
 fi
 
 # --- Build ------------------------------------------------------------------
@@ -110,11 +110,11 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 PLIST="$APP/Contents/Info.plist"
-if [[ -n "${EMOJIFY_VERSION:-}" ]]; then
-    plutil -replace CFBundleShortVersionString -string "${EMOJIFY_VERSION#v}" "$PLIST"
+if [[ -n "${COLON_VERSION:-}" ]]; then
+    plutil -replace CFBundleShortVersionString -string "${COLON_VERSION#v}" "$PLIST"
 fi
-if [[ -n "${EMOJIFY_BUILD:-}" ]]; then
-    plutil -replace CFBundleVersion -string "$EMOJIFY_BUILD" "$PLIST"
+if [[ -n "${COLON_BUILD:-}" ]]; then
+    plutil -replace CFBundleVersion -string "$COLON_BUILD" "$PLIST"
 fi
 plutil -lint "$PLIST" >/dev/null
 
@@ -128,7 +128,7 @@ fi
 
 shopt -s nullglob
 bundles=("$BIN_DIR"/*.bundle)
-[[ -d "$BIN_DIR/${APP_NAME}_EmojifyCore.bundle" ]] || die "${APP_NAME}_EmojifyCore.bundle missing from $BIN_DIR"
+[[ -d "$BIN_DIR/${APP_NAME}_ColonCore.bundle" ]] || die "${APP_NAME}_ColonCore.bundle missing from $BIN_DIR"
 for bundle in "${bundles[@]}"; do
     ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"
 done
@@ -176,8 +176,8 @@ else
     log "Signing with $SIGN_LABEL"
     SIGN_FLAGS+=(--timestamp=none)
 fi
-if [[ -f "$ROOT/Resources/Emojify.entitlements" ]]; then
-    SIGN_FLAGS+=(--entitlements "$ROOT/Resources/Emojify.entitlements")
+if [[ -f "$ROOT/Resources/Colon.entitlements" ]]; then
+    SIGN_FLAGS+=(--entitlements "$ROOT/Resources/Colon.entitlements")
 fi
 
 if [[ -d "$APP/Contents/Frameworks" ]]; then

@@ -2,29 +2,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "Emojify",
+    name: "Colon",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Emojify", targets: ["Emojify"]),
+        .executable(name: "Colon", targets: ["Colon"]),
     ],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.0.0"),
     ],
     targets: [
         .target(
-            name: "EmojifyCore",
+            name: "ColonCore",
             resources: [.copy("Resources/emoji.json")]
         ),
         .executableTarget(
-            name: "Emojify",
+            name: "Colon",
             dependencies: [
-                "EmojifyCore",
+                "ColonCore",
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ]
         ),
         .testTarget(
-            name: "EmojifyCoreTests",
-            dependencies: ["EmojifyCore"]
+            name: "ColonCoreTests",
+            dependencies: ["ColonCore"]
         ),
     ],
     swiftLanguageModes: [.v5]

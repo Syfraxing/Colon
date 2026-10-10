@@ -1,4 +1,4 @@
-# Emojify developer tasks. `make help` lists them.
+# Colon developer tasks. `make help` lists them.
 # Pass NATIVE=1 to build only for this Mac's architecture (faster than universal).
 
 SHELL := /bin/bash
@@ -13,13 +13,13 @@ help: ## Show this help
 build: ## Debug build with SwiftPM
 	swift build
 
-app: ## Build and sign build/Emojify.app (universal release)
+app: ## Build and sign build/Colon.app (universal release)
 	scripts/build-app.sh $(APP_FLAGS)
 
 install: ## Build, install to /Applications and launch
 	scripts/install.sh $(APP_FLAGS)
 
-dmg: app ## Build dist/Emojify-<version>.dmg
+dmg: app ## Build dist/Colon-<version>.dmg
 	scripts/make-dmg.sh
 
 test: ## Run the unit tests
@@ -29,7 +29,7 @@ clean: ## Remove all build products
 	swift package clean
 	rm -rf .build build dist
 
-emoji-data: ## Regenerate Sources/EmojifyCore/Resources/emoji.json
+emoji-data: ## Regenerate Sources/ColonCore/Resources/emoji.json
 	python3 scripts/build-emoji-data.py
 
 icon: ## Regenerate the app icon in Resources/

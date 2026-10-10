@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Emojify, quits the running copy, installs it to /Applications (or
+# Builds Colon, quits the running copy, installs it to /Applications (or
 # ~/Applications when /Applications is not writable) and launches it.
 #
 # Usage: scripts/install.sh [build-app.sh options, e.g. --native]
@@ -8,8 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 export BUILD_DIR
-APP_NAME="Emojify"
-BUNDLE_ID="so.slayer.Emojify"
+APP_NAME="Colon"
+BUNDLE_ID="so.slayer.Colon"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 

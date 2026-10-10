@@ -1,11 +1,11 @@
 #!/usr/bin/env swift
-// Renders the Emojify app icon programmatically and packs it into Resources/AppIcon.icns.
+// Renders the Colon app icon programmatically and packs it into Resources/AppIcon.icns.
 //
 //   swift scripts/make-icon.swift [--png path/to/preview.png]
 //
-// Design: a dark glass squircle on the macOS icon grid (824pt body on a 1024pt canvas) with a
-// face made of the trigger itself: ":)" turned upright, so the colon becomes the eyes and the
-// parenthesis the smile. The smile glows in the Emojify accent, hsl(211 92% 62%).
+// Design: a dark glass squircle on the macOS icon grid (824pt body on a 1024pt canvas) holding
+// a single colon — the trigger itself. Two round dots stacked on the centre line: the top one
+// crisp white, the bottom one glowing in the Colon accent, hsl(211 92% 62%).
 
 import AppKit
 import CoreGraphics
@@ -45,6 +45,10 @@ func linear(_ colors: [CGColor], _ locations: [CGFloat]) -> CGGradient {
 
 func drawIcon(in ctx: CGContext) {
     let shape = squircle(in: body)
+    let dotRadius: CGFloat = 98
+    let dotGap: CGFloat = 118
+    let topY = 512 + dotRadius + dotGap / 2
+    let bottomY = 512 - dotRadius - dotGap / 2
 
     // Drop shadow under the body, as on the macOS icon grid.
     ctx.saveGState()
@@ -63,23 +67,23 @@ func drawIcon(in ctx: CGContext) {
         start: CGPoint(x: 512, y: body.maxY), end: CGPoint(x: 512, y: body.minY), options: []
     )
 
-    // Accent glow pooling behind the smile.
+    // Accent glow pooling behind the lower dot.
     ctx.drawRadialGradient(
-        linear([rgb(0.270, 0.608, 0.970, 0.38), rgb(0.270, 0.608, 0.970, 0.10), rgb(0.270, 0.608, 0.970, 0)], [0, 0.45, 1]),
-        startCenter: CGPoint(x: 512, y: 330), startRadius: 0,
-        endCenter: CGPoint(x: 512, y: 330), endRadius: 440, options: []
+        linear([rgb(0.270, 0.608, 0.970, 0.40), rgb(0.270, 0.608, 0.970, 0.10), rgb(0.270, 0.608, 0.970, 0)], [0, 0.45, 1]),
+        startCenter: CGPoint(x: 512, y: bottomY), startRadius: 0,
+        endCenter: CGPoint(x: 512, y: bottomY), endRadius: 420, options: []
     )
 
-    // Glass sheen: a soft elliptical highlight across the upper half.
+    // Glass sheen: a soft elliptical highlight across the upper half, fading to nothing at its
+    // lower edge so the ellipse never reads as a hard line.
     ctx.saveGState()
     let sheen = CGPath(ellipseIn: CGRect(x: body.minX - 180, y: 560, width: body.width + 360, height: 700), transform: nil)
     ctx.addPath(sheen)
     ctx.clip()
     ctx.drawLinearGradient(
-        linear([rgb(1, 1, 1, 0.10), rgb(1, 1, 1, 0.015)], [0, 1]),
+        linear([rgb(1, 1, 1, 0.10), rgb(1, 1, 1, 0.03), rgb(1, 1, 1, 0)], [0, 0.7, 1]),
         start: CGPoint(x: 512, y: body.maxY), end: CGPoint(x: 512, y: 560), options: []
     )
-    ctx.restoreGState()
     ctx.restoreGState()
 
     // Hairline rim: bright at the top edge fading toward the bottom.
@@ -94,38 +98,31 @@ func drawIcon(in ctx: CGContext) {
     )
     ctx.restoreGState()
 
-    // Eyes: the colon, upright. Rounded vertical pills, crisp white.
-    let eyeSize = CGSize(width: 92, height: 136)
-    for centerX in [512 - 132, 512 + 132] as [CGFloat] {
-        let eye = CGRect(x: centerX - eyeSize.width / 2, y: 560, width: eyeSize.width, height: eyeSize.height)
-        let path = CGPath(roundedRect: eye, cornerWidth: eyeSize.width / 2, cornerHeight: eyeSize.width / 2, transform: nil)
-        ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 30, color: rgb(1, 1, 1, 0.35))
-        ctx.addPath(path)
-        ctx.setFillColor(rgb(0.97, 0.97, 0.98))
-        ctx.fillPath()
-        ctx.restoreGState()
-    }
-
-    // Smile: the parenthesis, a thick rounded arc in an accent gradient with a glow.
-    let smile = CGMutablePath()
-    smile.addArc(center: CGPoint(x: 512, y: 520), radius: 230,
-                 startAngle: .pi * 1.18, endAngle: .pi * 1.82, clockwise: false)
-    let stroke = smile.copy(strokingWithWidth: 78, lineCap: .round, lineJoin: .round, miterLimit: 10)
+    // The colon: two equal dots on the vertical centre line, the gap a little over half a dot
+    // so they still separate at 16 px.
+    let top = CGRect(x: 512 - dotRadius, y: topY - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+    let bottom = CGRect(x: 512 - dotRadius, y: bottomY - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
 
     ctx.saveGState()
-    ctx.setShadow(offset: .zero, blur: 60, color: rgb(0.270, 0.608, 0.970, 0.9))
-    ctx.addPath(stroke)
+    ctx.setShadow(offset: .zero, blur: 34, color: rgb(1, 1, 1, 0.35))
+    ctx.addEllipse(in: top)
+    ctx.setFillColor(rgb(0.97, 0.97, 0.98))
+    ctx.fillPath()
+    ctx.restoreGState()
+
+    ctx.saveGState()
+    ctx.setShadow(offset: .zero, blur: 64, color: rgb(0.270, 0.608, 0.970, 0.9))
+    ctx.addEllipse(in: bottom)
     ctx.setFillColor(accent)
     ctx.fillPath()
     ctx.restoreGState()
 
     ctx.saveGState()
-    ctx.addPath(stroke)
+    ctx.addEllipse(in: bottom)
     ctx.clip()
     ctx.drawLinearGradient(
         linear([accentLight, accent, rgb(0.20, 0.47, 0.92)], [0, 0.5, 1]),
-        start: CGPoint(x: 512, y: 380), end: CGPoint(x: 512, y: 250), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+        start: CGPoint(x: 512, y: bottom.maxY), end: CGPoint(x: 512, y: bottom.minY), options: []
     )
     ctx.restoreGState()
 }
@@ -146,7 +143,7 @@ func render(pixels: Int) -> Data {
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 let fm = FileManager.default
-let work = fm.temporaryDirectory.appendingPathComponent("emojify-icon-\(UUID().uuidString)")
+let work = fm.temporaryDirectory.appendingPathComponent("colon-icon-\(UUID().uuidString)")
 let iconset = work.appendingPathComponent("AppIcon.iconset")
 try fm.createDirectory(at: iconset, withIntermediateDirectories: true)
 defer { try? fm.removeItem(at: work) }

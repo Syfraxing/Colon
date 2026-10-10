@@ -1,20 +1,20 @@
-# Emojify architecture
+# Colon architecture
 
 Open-source macOS menu-bar emoji picker. Type `:haha` anywhere → a glass picker appears at the caret → Enter/Tab inserts the emoji, replacing `:haha`. Ranking = instant local fuzzy search + frecency, then reranked by **Jev** (TypeSafe AI decision model) in ~150 ms.
 
 - Swift 6 toolchain, Swift 5 language mode, SwiftPM only (no Xcode project). macOS 14+.
-- `swift build`, `swift test`, `scripts/build-app.sh` → `build/Emojify.app`.
+- `swift build`, `swift test`, `scripts/build-app.sh` → `build/Colon.app`.
 - Dependency: `KeyboardShortcuts` (sindresorhus) for the global "open picker" hotkey + recorder UI.
 
 ## Layout & ownership
 
 | Path | Owner | Contents |
 | --- | --- | --- |
-| `Package.swift`, `Sources/EmojifyCore/Model`, `Sources/EmojifyCore/Settings`, `Sources/Emojify/App` | coordinator | shared types, settings, wiring. Workers MUST NOT change public signatures here; ask the coordinator. |
-| `Sources/EmojifyCore/Data`, `Ranking`, `Jev`, `Resources`, `scripts/build-emoji-data.*`, `Tests/EmojifyCoreTests/*` (except Trigger) | core | dataset, search, frecency, Jev client, `SuggestionEngine` |
-| `Sources/EmojifyCore/Input`, `Sources/Emojify/Input`, `Tests/EmojifyCoreTests/TriggerEngineTests.swift` | input | event tap, `TriggerEngine`, caret, insertion, exclusions |
-| `Sources/Emojify/Picker` | picker | glass panel UI, inline + search modes |
-| `Sources/Emojify/Shell`, `Resources/AppIcon*` | shell | menu bar, settings window, onboarding, icon |
+| `Package.swift`, `Sources/ColonCore/Model`, `Sources/ColonCore/Settings`, `Sources/Colon/App` | coordinator | shared types, settings, wiring. Workers MUST NOT change public signatures here; ask the coordinator. |
+| `Sources/ColonCore/Data`, `Ranking`, `Jev`, `Resources`, `scripts/build-emoji-data.*`, `Tests/ColonCoreTests/*` (except Trigger) | core | dataset, search, frecency, Jev client, `SuggestionEngine` |
+| `Sources/ColonCore/Input`, `Sources/Colon/Input`, `Tests/ColonCoreTests/TriggerEngineTests.swift` | input | event tap, `TriggerEngine`, caret, insertion, exclusions |
+| `Sources/Colon/Picker` | picker | glass panel UI, inline + search modes |
+| `Sources/Colon/Shell`, `Resources/AppIcon*` | shell | menu bar, settings window, onboarding, icon |
 | `scripts/` (except emoji data), `Resources/Info.plist`, `.github/`, `README.md`, `LICENSE`, `CONTRIBUTING.md` | packaging | .app bundle, signing, DMG, CI, docs |
 
 Every scaffold body is marked `// SCAFFOLD`; the owner replaces all of them. No `SCAFFOLD` may remain at integration.
@@ -47,7 +47,7 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 - `CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: keyDown | flagsChanged | left/right mouseDown)`; re-enable on `tapDisabledByTimeout/UserInput`. Callback must be fast; never block on network.
 - Translate keys with the event's unicode string (`keyboardGetUnicodeString`), honour current layout.
 - Ignore events we synthesize ourselves (mark them with `eventSourceUserData`).
-- Silent when: `!settings.isEnabled`, frontmost bundle ID excluded, `IsSecureEventInputEnabled()`, focused AX element is `AXSecureTextField`, or Emojify itself is frontmost (settings window typing).
+- Silent when: `!settings.isEnabled`, frontmost bundle ID excluded, `IsSecureEventInputEnabled()`, focused AX element is `AXSecureTextField`, or Colon itself is frontmost (settings window typing).
 - Context for Jev (`PredictionContext`): app name + bundle ID always; `textBeforeTrigger` only if `settings.sendTextContext`, read ON DEMAND via AX from the focused element's value (bounded to the last 300 chars before the trigger), never from captured keystrokes, never from secure fields.
 - Insertion default `.typing`: N backspaces then `keyboardSetUnicodeString` in ≤20 UTF-16 unit chunks; `.paste`: save pasteboard, set emoji, ⌘V, restore after ~250 ms.
 - Caret: AX `kAXSelectedTextRangeAttribute` + `kAXBoundsForRangeParameterizedAttribute`; fallbacks (Electron `AXManualAccessibility`, focused element frame, mouse location). Convert AX top-left coords to Cocoa bottom-left using the primary screen height.

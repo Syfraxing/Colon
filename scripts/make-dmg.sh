@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Packages build/Emojify.app into dist/Emojify-<version>.dmg with an Applications
+# Packages build/Colon.app into dist/Colon-<version>.dmg with an Applications
 # shortcut, laid out for drag-to-install. Builds the app first if it is missing.
 #
 # Usage: scripts/make-dmg.sh [build-app.sh options, used only when building]
 #
 # Environment:
-#   BUILD_DIR       Where Emojify.app lives (default: <repo>/build).
+#   BUILD_DIR       Where Colon.app lives (default: <repo>/build).
 #   DIST_DIR        Output directory (default: <repo>/dist).
 #   SIGN_IDENTITY   When set to a real identity (not "-"), the DMG is signed too.
 set -euo pipefail
@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 export BUILD_DIR
-APP_NAME="Emojify"
+APP_NAME="Colon"
 APP="$BUILD_DIR/$APP_NAME.app"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -26,7 +26,7 @@ VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.pl
 VOLUME="$APP_NAME $VERSION"
 DMG="$DIST_DIR/$APP_NAME-$VERSION.dmg"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/emojify-dmg.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/colon-dmg.XXXXXX")"
 MOUNT=""
 cleanup() {
     [[ -n "$MOUNT" ]] && hdiutil detach "$MOUNT" -quiet -force 2>/dev/null || true
