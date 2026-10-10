@@ -23,6 +23,7 @@ final class PracticeController: ObservableObject {
             trigger: settings.triggerString,
             minQueryLength: settings.minQueryLength,
             autoReplaceOnClosingTrigger: settings.autoReplaceOnClosingTrigger,
+            showsRecentsOnTrigger: settings.showRecentsOnTrigger,
             shortcodeExists: { store.emoji(forShortcode: $0) != nil }
         )
     }
@@ -36,6 +37,10 @@ final class PracticeController: ObservableObject {
         trigger.trigger = settings.triggerString
         trigger.minQueryLength = settings.minQueryLength
         trigger.autoReplaceOnClosingTrigger = settings.autoReplaceOnClosingTrigger
+        trigger.showsRecentsOnTrigger = settings.showRecentsOnTrigger
+        // The practice list is always vertical, and GIF search needs another app to paste into.
+        trigger.horizontalLayout = false
+        trigger.gifSearchEnabled = false
 
         let result = trigger.handle(input, pickerVisible: isShowing && !visibleSuggestions.isEmpty)
         switch result.action {
@@ -58,6 +63,16 @@ final class PracticeController: ObservableObject {
             if suggestions.indices.contains(selectedIndex) {
                 insert(engine.output(for: suggestions[selectedIndex].emoji), replacing: deleteCount, in: textView)
             }
+            hide()
+        case .commitSelectionKeepOpen(let deleteCount):
+            let suggestions = visibleSuggestions
+            if suggestions.indices.contains(selectedIndex) {
+                insert(engine.output(for: suggestions[selectedIndex].emoji), replacing: deleteCount, in: textView)
+            } else {
+                trigger.keepOpenInsertFailed()
+            }
+        case .openGIFSearch:
+            // Unreachable: GIF search is turned off for the practice engine above.
             hide()
         case .commitShortcode(let shortcode, let deleteCount):
             if let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) {
@@ -249,6 +264,15 @@ final class PracticeNSTextView: NSTextView {
         }
     }
 
+    /// ⌘↩ arrives as a key equivalent; route it to the picker (multi-insert) while it is open.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let controller, window?.firstResponder === self, Self.keyInput(for: event) == .commandEnter,
+           controller.handle(.commandEnter, in: self) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
         controller?.interrupt()
         super.mouseDown(with: event)
@@ -279,9 +303,14 @@ final class PracticeNSTextView: NSTextView {
 
     static func keyInput(for event: NSEvent) -> KeyInput {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.subtracting([.numericPad, .function, .capsLock]) == .command,
+           event.keyCode == 36 || event.keyCode == 76 { return .commandEnter }
         if flags.contains(.command) || flags.contains(.control) { return .interrupt }
         switch event.keyCode {
         case 51: return .backspace
+        case 123...126 where flags.contains(.shift) || flags.contains(.option):
+            // Text selection and word jumps stay native.
+            return .interrupt
         case 126: return .up
         case 125: return .down
         case 123: return .left

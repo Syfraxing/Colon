@@ -35,6 +35,8 @@ public final class SuggestionEngine: ObservableObject {
     /// With no local match at all, Jev's top pick needs this probability before anything is shown,
     /// so gibberish (`:zzqx` → top ≈ 0.2) leaves Enter native while slang (`:yeet` → 🚀 ≈ 0.67) still works.
     public nonisolated static let noLocalMatchMinimumTop = 0.4
+    /// Most emoji shown on the bare trigger (recents strip).
+    public nonisolated static let recentsLimit = 8
     static let localPoolSize = 40
     static let localCandidates = 24
     static let frecentCandidates = 16
@@ -89,7 +91,8 @@ public final class SuggestionEngine: ObservableObject {
 
     /// Recompute local results synchronously, then (debounced) ask Jev to rerank.
     /// The same query with only a new context (e.g. the AX anchor/text arriving late) keeps the
-    /// local results and just reschedules Jev.
+    /// local results and just reschedules Jev. The raw empty query (the bare trigger) publishes the
+    /// recents strip and never calls Jev.
     public func update(query: String, context: PredictionContext) {
         let normalized = EmojiSearch.normalize(query)
         let sameQuery = !normalized.isEmpty && normalized == EmojiSearch.normalize(self.query)
@@ -102,8 +105,17 @@ public final class SuggestionEngine: ObservableObject {
 
         guard !normalized.isEmpty else {
             localPool = []
-            suggestions = []
-            orderFrozen = false
+            guard query.isEmpty else {
+                // Only the bare trigger shows recents; text that normalises away (`::`, spaces) shows nothing.
+                suggestions = []
+                orderFrozen = false
+                return
+            }
+            // Rebuilding on a context-only update would reorder the strip under a moved highlight.
+            if !(startingSession && orderFrozen && !suggestions.isEmpty) {
+                orderFrozen = false
+                suggestions = recents()
+            }
             return
         }
 
@@ -180,6 +192,21 @@ public final class SuggestionEngine: ObservableObject {
     /// probabilities and never reorders rows under the user. `update` unfreezes.
     public func freezeOrder() {
         orderFrozen = true
+    }
+
+    /// The user's most frecent emoji, topped up with popular ones, at most `recentsLimit` (and
+    /// `maxResults`). Scores descend in display order so the strip reads best-first.
+    public func recents() -> [Suggestion] {
+        let limit = min(Self.recentsLimit, maxResults)
+        var result: [Suggestion] = []
+        var seen = Set<String>()
+        func add(_ emoji: Emoji) {
+            guard result.count < limit, seen.insert(emoji.id).inserted else { return }
+            result.append(Suggestion(emoji: emoji, score: Double(limit - result.count)))
+        }
+        usage.top(limit).compactMap { store.emoji(id: $0) }.forEach(add)
+        popular.forEach(add)
+        return result
     }
 
     /// Call after the user inserts an emoji.

@@ -81,17 +81,34 @@ enum Inserter {
             }
         case .paste:
             guard !text.isEmpty else { break }
-            putOnPasteboard(text)
-            events += SyntheticEvent.keyPress(KeyLayout.keyCode(for: "v") ?? CGKeyCode(kVK_ANSI_V),
-                                               flags: .maskCommand)
+            let item = NSPasteboardItem()
+            item.setString(text, forType: .string)
+            item.setData(Data(), forType: transientType)
+            item.setData(Data(), forType: concealedType)
+            putOnPasteboard(item, restoreAfter: pasteRestoreDelay)
+            events += pasteKeystroke()
         }
         events.forEach(poster.post)
         InputLog.debug("inserted via \(method.rawValue), deleted \(deleteCount)")
     }
 
+    /// Pastes a prepared pasteboard item (e.g. a GIF's file URL + data) into the frontmost app with
+    /// ⌘V, whatever the insertion method, then restores the user's pasteboard after `restoreAfter`
+    /// seconds unless they copied something meanwhile. Shares the save-once state with text pastes,
+    /// so back-to-back inserts never save our own item as "the user's". Call outside the tap callback.
+    static func paste(item: NSPasteboardItem, restoreAfter: TimeInterval) {
+        putOnPasteboard(item, restoreAfter: restoreAfter)
+        pasteKeystroke().forEach(EventPoster.hid.post)
+        InputLog.debug("pasted pasteboard item")
+    }
+
+    private static func pasteKeystroke() -> [CGEvent] {
+        SyntheticEvent.keyPress(KeyLayout.keyCode(for: "v") ?? CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+    }
+
     /// Saves every item and type on the general pasteboard (once, even across rapid inserts),
-    /// writes `text` marked transient, and schedules the restore.
-    private static func putOnPasteboard(_ text: String) {
+    /// writes `item`, and schedules the restore.
+    private static func putOnPasteboard(_ item: NSPasteboardItem, restoreAfter delay: TimeInterval) {
         let pasteboard = NSPasteboard.general
         restoreWork?.cancel()
         if savedPasteboard == nil {
@@ -104,10 +121,6 @@ enum Inserter {
             }
         }
         pasteboard.clearContents()
-        let item = NSPasteboardItem()
-        item.setString(text, forType: .string)
-        item.setData(Data(), forType: transientType)
-        item.setData(Data(), forType: concealedType)
         pasteboard.writeObjects([item])
         pasteboardChangeCount = pasteboard.changeCount
 
@@ -115,7 +128,7 @@ enum Inserter {
             MainActor.assumeIsolated { restorePasteboard() }
         }
         restoreWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + pasteRestoreDelay, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay), execute: work)
     }
 
     private static func restorePasteboard() {

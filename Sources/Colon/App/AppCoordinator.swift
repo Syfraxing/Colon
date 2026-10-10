@@ -147,4 +147,24 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     func inputPickerIsVisible() -> Bool {
         picker.isVisible && picker.selectedSuggestion != nil
     }
+
+    // MARK: v0.4 input
+
+    /// GIF search panel; the GIF controller assigns itself here in `start()`.
+    var gifPicker: GIFPicking?
+
+    /// ⌘↩: insert the selection but leave the picker (and the capture) open.
+    func inputCommitSelectionKeepOpen() -> String? {
+        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
+        engine.recordUse(emoji)
+        return engine.output(for: emoji)
+    }
+
+    func inputOpenGIFSearch(context: PredictionContext, pendingText: String) {
+        openGIFSearch(context: context, pendingText: pendingText)
+    }
+
+    func openGIFSearch(context: PredictionContext, pendingText: String) {
+        gifPicker?.show(context: context, pendingText: pendingText)
+    }
 }
