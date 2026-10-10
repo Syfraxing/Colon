@@ -55,6 +55,20 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 cd "$ROOT"
 
+# The KeyboardShortcuts dependency uses SwiftUI `#Preview`, whose macro plugin ships only
+# with full Xcode. Command Line Tools alone fail deep in the build with
+# "plugin for module 'PreviewsMacros' not found", so say so up front.
+if [[ "$(xcode-select -p 2>/dev/null)" != *.app/Contents/Developer ]]; then
+    if [[ -d /Applications/Xcode.app ]]; then
+        die "the active developer directory is Command Line Tools ($(xcode-select -p 2>/dev/null)).
+       Switch to Xcode:  sudo xcode-select -s /Applications/Xcode.app
+       Or skip building: download Emojify from https://github.com/Syfraxing/Emojify/releases/latest"
+    fi
+    die "building Emojify needs full Xcode (Command Line Tools are not enough).
+       Install Xcode from the App Store, or skip building and download the app:
+       https://github.com/Syfraxing/Emojify/releases/latest"
+fi
+
 # --- Build ------------------------------------------------------------------
 
 SWIFT_FLAGS=(-c release)

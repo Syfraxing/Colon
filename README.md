@@ -143,7 +143,9 @@ and it never logs your keys, queries or typed text.
 
 ## Build from source
 
-Requires macOS 14+ and Xcode 16+ (Swift 6 toolchain).
+Most people should just [download the release](https://github.com/Syfraxing/Emojify/releases/latest).
+Building requires macOS 14+ and full **Xcode 16+** selected with `xcode-select` (Command Line
+Tools alone fail with `plugin for module 'PreviewsMacros' not found`).
 
 ```sh
 git clone https://github.com/Syfraxing/Emojify.git
