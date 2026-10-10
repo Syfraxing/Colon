@@ -51,6 +51,12 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
   editors where `:` means something else (Terminal, iTerm2, Ghostty, Warp, VS Code, Xcode,
   Zed, Cursor), and in password managers (1Password, Bitwarden, Passwords, Keychain
   Access). Add or remove apps in Settings → Excluded Apps.
+- **Text snippets.** Save text behind your own triggers: `:sig` → your email signature,
+  `:email`, `:phone`, `:addr`, `:name`. Matching snippets show at the top of the picker
+  (with a text preview) and insert like an emoji; multi-line text is pasted so line breaks
+  never act as Return. Set them up in Settings → Snippets, where one click adds starter
+  rows for name, email, phone, address and signature. Triggers are letters, digits, `_`,
+  `+` or `-`, unique ignoring case.
 - **Skin tones** applied automatically wherever an emoji supports them.
 - **Frecency.** Emoji you use often and recently float to the top.
 - **Private by design.** Never active in password fields, never keeps a log of your
@@ -134,8 +140,9 @@ with it.
 - It is silent in secure text fields (passwords), whenever macOS Secure Input is on, while
   an input method (Japanese, Chinese, Korean…) is active, in excluded apps (password
   managers and terminals by default), and in its own windows.
-- Settings and emoji usage counts (for frecency) are stored locally in Colon's
-  preferences. Your Jev key is stored in the Keychain.
+- Settings, your snippets and emoji usage counts (for frecency) are stored locally in
+  Colon's preferences. Your Jev key is stored in the Keychain. Snippet picks are not
+  counted.
 
 **Sent to Jev** only when a key is set, **Use Jev** is on, and your query is at least two
 characters long. Requests go over HTTPS to `api.typesafe.ai` with no cookies or cache, and
@@ -146,6 +153,9 @@ contain:
 - **only if you opt in** to **Send text context** (off by default, Settings → Jev): up to
   300 characters of the text right before the trigger, read from the focused field at that
   moment so suggestions fit the sentence. Never read from password fields.
+
+Snippets never go to Jev: while any snippet matches what you've typed, Colon doesn't ask
+Jev at all for that query.
 
 Nothing is sent to Jev when it is off or no key is set. The daily update check fetches
 `appcast.xml` from GitHub Releases (an HTTPS request whose user agent names only the Colon

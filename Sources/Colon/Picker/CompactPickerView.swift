@@ -19,10 +19,10 @@ struct CompactPickerView: View {
                 }
                 HStack(spacing: 0) {
                     ForEach(Array(model.suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                        PulsingGlyph(glyph: model.displayText(suggestion.emoji), id: suggestion.id,
-                                     size: PickerMetrics.compactGlyph, selectedScale: 1.1,
-                                     isSelected: model.showsSelection && index == model.selectedIndex,
-                                     pulse: model.insertPulse, reduceMotion: model.reduceMotion)
+                        SuggestionGlyph(suggestion: suggestion, displayText: model.displayText,
+                                        size: PickerMetrics.compactGlyph, selectedScale: 1.1,
+                                        isSelected: model.showsSelection && index == model.selectedIndex,
+                                        pulse: model.insertPulse, reduceMotion: model.reduceMotion, theme: theme)
                             .frame(width: PickerMetrics.compactCell, height: PickerMetrics.compactCell)
                             .transition(.opacity)
                     }
@@ -54,10 +54,26 @@ private struct CompactCaption: View {
                 RecentsLabel(theme: theme)
                     .transition(.opacity)
             } else if let selected {
-                ShortcodeText(code: ShortcodeMatcher.displayShortcode(for: selected.emoji, query: model.query),
-                              query: model.query, theme: theme, isSelected: true)
-                    .id(selected.id)
-                    .transition(.opacity)
+                Group {
+                    switch selected.item {
+                    case .emoji(let emoji):
+                        ShortcodeText(code: ShortcodeMatcher.displayShortcode(for: emoji, query: model.query),
+                                      query: model.query, theme: theme, isSelected: true)
+                    case .snippet(let snippet):
+                        HStack(spacing: 8) {
+                            ShortcodeText(code: snippet.trigger, query: model.query, theme: theme,
+                                          isSelected: true, closes: false)
+                                .layoutPriority(1)
+                            Text(SnippetPreview.oneLine(snippet.text))
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                }
+                .id(selected.id)
+                .transition(.opacity)
             }
             Spacer(minLength: 6)
             Group {

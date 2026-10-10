@@ -39,7 +39,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
             .sink { [weak statusItem] status in statusItem?.update(inputStatus: status) }
             .store(in: &cancellables)
 
-        picker.onPick = { [weak self] emoji in self?.handleMousePick(emoji) }
+        picker.onPick = { [weak self] item in self?.handleMousePick(item) }
         picker.onDismiss = { [weak self] in
             self?.input.cancelTracking()
             self?.engine.reset()
@@ -94,9 +94,9 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         picker.showSearch()
     }
 
-    private func handleMousePick(_ emoji: Emoji) {
-        let text = engine.output(for: emoji)
-        engine.recordUse(emoji)
+    private func handleMousePick(_ item: Suggestion.Item) {
+        let text = engine.output(for: item)
+        engine.recordUse(item)
         Feedback.inserted(settings)
         // Take the search target before hiding, so nothing the hide triggers (resign key) can clear it.
         let searchTarget = searchTargetApp
@@ -140,10 +140,10 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     func inputCommitSelection() -> String? {
         defer { inputHide() }
-        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
-        engine.recordUse(emoji)
+        guard let item = picker.selectedSuggestion?.item else { return nil }
+        engine.recordUse(item)
         Feedback.inserted(settings)
-        return engine.output(for: emoji)
+        return engine.output(for: item)
     }
 
     func inputCommit(shortcode: String) -> String? {
@@ -166,10 +166,10 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     /// ⌘↩: insert the selection but leave the picker (and the capture) open.
     func inputCommitSelectionKeepOpen() -> String? {
-        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
-        engine.recordUse(emoji)
+        guard let item = picker.selectedSuggestion?.item else { return nil }
+        engine.recordUse(item)
         Feedback.inserted(settings)
         picker.noteInserted()
-        return engine.output(for: emoji)
+        return engine.output(for: item)
     }
 }

@@ -70,9 +70,10 @@ final class JevEvalTests: XCTestCase {
             while engine.isRefining, ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(5))
             }
-            let localTop = local.search(query, limit: 5).map(\.emoji.char).joined(separator: " ")
+            let localTop = local.search(query, limit: 5).compactMap(\.emoji?.char).joined(separator: " ")
             let blended = engine.suggestions.prefix(5).map { s in
-                s.jevProbability.map { "\(s.emoji.char)\(Int(($0 * 100).rounded()))" } ?? s.emoji.char
+                let char = s.emoji?.char ?? ""
+                return s.jevProbability.map { "\(char)\(Int(($0 * 100).rounded()))" } ?? char
             }.joined(separator: " ")
             let latency: String
             switch engine.jevStatus {

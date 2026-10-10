@@ -168,7 +168,7 @@ private struct EmojiGrid: View {
                                     .onContinuousHover { phase in
                                         if case .active = phase { model.hoverGrid(position) }
                                     }
-                                    .onTapGesture { model.pick(section.emoji[item]) }
+                                    .onTapGesture { model.pick(.emoji(section.emoji[item])) }
                             }
                         } header: {
                             Text(section.title)
@@ -223,9 +223,10 @@ private struct SearchFooter: View {
     let theme: PickerTheme
 
     var body: some View {
-        let emoji = model.showsGrid ? model.selectedGridEmoji : model.selectedSuggestion?.emoji
+        let item = model.currentItem
         HStack(spacing: 10) {
-            if let emoji {
+            switch item {
+            case .emoji(let emoji):
                 Text(model.displayText(emoji))
                     .font(.system(size: 26))
                     .frame(width: 32)
@@ -240,9 +241,25 @@ private struct SearchFooter: View {
                         .lineLimit(1)
                 }
                 .transaction { $0.animation = nil }
+            case .snippet(let snippet):
+                SnippetBadge(size: 26, theme: theme)
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(SnippetPreview.oneLine(snippet.text))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(theme.text)
+                        .lineLimit(1)
+                    Text(":\(snippet.trigger)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.secondary)
+                        .lineLimit(1)
+                }
+                .transaction { $0.animation = nil }
+            case nil:
+                EmptyView()
             }
             Spacer(minLength: 8)
-            if emoji != nil {
+            if item != nil {
                 HStack(spacing: 6) {
                     Keycap(model.showsGrid ? "←↑↓→" : "↑↓", theme: theme)
                     Text("move").foregroundStyle(theme.tertiary)

@@ -67,8 +67,10 @@ enum Inserter {
 
     /// Same as `replace(deleteCount:with:method:)`, choosing where the events are posted.
     /// All events are posted back to back in order: they travel the same queue as the user's keys,
-    /// so no sleeps are needed for ordering.
+    /// so no sleeps are needed for ordering. Multi-line text (snippets) is always pasted: a typed
+    /// line break can act as Return, which sends the message in chat apps.
     static func replace(deleteCount: Int, with text: String, method: InsertionMethod, poster: EventPoster) {
+        let method = text.contains(where: \.isNewline) ? .paste : method
         var events: [CGEvent] = []
         for _ in 0..<max(0, deleteCount) {
             events += SyntheticEvent.keyPress(CGKeyCode(kVK_Delete))

@@ -39,6 +39,7 @@ public final class AppSettings: ObservableObject {
         public static let pickerLayout = "pickerLayout"
         public static let playsInsertSound = "playsInsertSound"
         public static let hapticFeedback = "hapticFeedback"
+        public static let snippets = "snippets"
     }
 
     /// Excluded on first launch: apps with their own `:shortcode:` picker, plus terminals, IDEs and
@@ -108,6 +109,9 @@ public final class AppSettings: ObservableObject {
     @Published public var playsInsertSound: Bool { didSet { defaults.set(playsInsertSound, forKey: Key.playsInsertSound) } }
     /// Trackpad haptic tick when the selection moves.
     @Published public var hapticFeedback: Bool { didSet { defaults.set(hapticFeedback, forKey: Key.hapticFeedback) } }
+    /// Text snippets (`:sig` → signature). Personal data: kept in local `UserDefaults` only, never
+    /// sent to Jev and never logged.
+    @Published public var snippets: [Snippet] { didSet { defaults.set(Self.encode(snippets), forKey: Key.snippets) } }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -144,11 +148,21 @@ public final class AppSettings: ObservableObject {
         pickerLayout = PickerLayout(rawValue: defaults.string(forKey: Key.pickerLayout) ?? "") ?? .list
         playsInsertSound = defaults.bool(forKey: Key.playsInsertSound)
         hapticFeedback = defaults.bool(forKey: Key.hapticFeedback)
+        snippets = Self.decodeSnippets(defaults.data(forKey: Key.snippets))
     }
 
     public func isExcluded(bundleID: String?) -> Bool {
         guard let bundleID else { return false }
         return excludedBundleIDs.contains(bundleID)
+    }
+
+    private static func encode(_ snippets: [Snippet]) -> Data? {
+        try? JSONEncoder().encode(snippets)
+    }
+
+    private static func decodeSnippets(_ data: Data?) -> [Snippet] {
+        guard let data else { return [] }
+        return (try? JSONDecoder().decode([Snippet].self, from: data)) ?? []
     }
 }
 

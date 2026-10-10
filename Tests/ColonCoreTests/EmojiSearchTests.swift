@@ -5,7 +5,7 @@ final class EmojiSearchTests: XCTestCase {
     private let search = EmojiSearch(store: .shared, usage: nil)
 
     private func chars(_ query: String, _ limit: Int = 8) -> [String] {
-        search.search(query, limit: limit).map(\.emoji.char)
+        search.search(query, limit: limit).compactMap(\.emoji?.char)
     }
 
     func testExactShortcodeWins() {
@@ -42,7 +42,7 @@ final class EmojiSearchTests: XCTestCase {
 
     func testTierOrdering() {
         let results = search.search("heart", limit: 30)
-        XCTAssertEqual(results.first?.emoji.char, "❤️")
+        XCTAssertEqual(results.first?.emoji?.char, "❤️")
         XCTAssertEqual(results.map(\.score), results.map(\.score).sorted(by: >))
     }
 
@@ -56,7 +56,7 @@ final class EmojiSearchTests: XCTestCase {
         let results = search.search("x", limit: 50)
         XCTAssertFalse(results.isEmpty)
         for suggestion in results {
-            XCTAssertTrue(suggestion.emoji.shortcodes.contains { $0.hasPrefix("x") }, suggestion.emoji.id)
+            XCTAssertTrue(suggestion.emoji?.shortcodes.contains { $0.hasPrefix("x") } == true, suggestion.id)
         }
     }
 
@@ -80,14 +80,14 @@ final class EmojiSearchTests: XCTestCase {
         let personalized = EmojiSearch(store: .shared, usage: usage)
 
         // 😂 and 😆 both have the keyword "haha"; popularity puts 😂 first until the user prefers 😆.
-        let before = personalized.search("haha", limit: 5).map(\.emoji.id)
+        let before = personalized.search("haha", limit: 5).map(\.id)
         XCTAssertLessThan(try XCTUnwrap(before.firstIndex(of: "joy")), try XCTUnwrap(before.firstIndex(of: "laughing")))
         for _ in 0..<3 { usage.recordUse(of: "laughing", query: "haha") }
-        XCTAssertEqual(personalized.search("haha", limit: 5).first?.emoji.id, "laughing")
+        XCTAssertEqual(personalized.search("haha", limit: 5).first?.id, "laughing")
 
         // Heavy use of 😂 must not push it above the exact shortcode match for "fire".
         for _ in 0..<20 { usage.recordUse(of: "laughing", query: "fire") }
-        XCTAssertEqual(personalized.search("fire", limit: 5).first?.emoji.id, "fire")
+        XCTAssertEqual(personalized.search("fire", limit: 5).first?.id, "fire")
     }
 
     func testPerformance() {

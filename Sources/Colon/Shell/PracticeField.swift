@@ -60,13 +60,13 @@ final class PracticeController: ObservableObject {
         case .commitSelection(let deleteCount):
             let suggestions = visibleSuggestions
             if suggestions.indices.contains(selectedIndex) {
-                insert(engine.output(for: suggestions[selectedIndex].emoji), replacing: deleteCount, in: textView)
+                insert(engine.output(for: suggestions[selectedIndex].item), replacing: deleteCount, in: textView)
             }
             hide()
         case .commitSelectionKeepOpen(let deleteCount):
             let suggestions = visibleSuggestions
             if suggestions.indices.contains(selectedIndex) {
-                insert(engine.output(for: suggestions[selectedIndex].emoji), replacing: deleteCount, in: textView)
+                insert(engine.output(for: suggestions[selectedIndex].item), replacing: deleteCount, in: textView)
             } else {
                 trigger.keepOpenInsertFailed()
             }
@@ -81,7 +81,7 @@ final class PracticeController: ObservableObject {
 
     func select(_ suggestion: Suggestion, in textView: NSTextView) {
         let deleteCount = trigger.typedLength ?? 0
-        insert(engine.output(for: suggestion.emoji), replacing: deleteCount, in: textView)
+        insert(engine.output(for: suggestion.item), replacing: deleteCount, in: textView)
         hide()
     }
 
@@ -197,11 +197,22 @@ private struct PracticeSuggestionRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(suggestion.emoji.char)
-                .font(.system(size: 18))
-            Text(":\(suggestion.emoji.id):")
-                .font(ShellTheme.mono(12, weight: .medium))
-                .foregroundStyle(isSelected ? .primary : .secondary)
+            switch suggestion.item {
+            case .emoji(let emoji):
+                Text(emoji.char)
+                    .font(.system(size: 18))
+                Text(":\(emoji.id):")
+                    .font(ShellTheme.mono(12, weight: .medium))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+            case .snippet(let snippet):
+                Image(systemName: "text.quote")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ShellTheme.accent)
+                    .frame(width: 22)
+                Text(":\(snippet.trigger)")
+                    .font(ShellTheme.mono(12, weight: .medium))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+            }
             Spacer(minLength: 0)
             if isSelected {
                 KeyCap("⏎")
