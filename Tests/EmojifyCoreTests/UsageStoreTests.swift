@@ -68,7 +68,44 @@ final class UsageStoreTests: XCTestCase {
 
         let second = UsageStore(fileURL: url, halfLife: 86_400)
         XCTAssertEqual(second.top(1), ["rocket"])
-        XCTAssertGreaterThan(second.affinity(of: "rocket", query: "ship"), 0)
+        XCTAssertGreaterThan(second.frecency(of: "rocket"), 0)
+    }
+
+    func testTypedQueriesNeverReachDisk() throws {
+        let store = UsageStore(fileURL: url, halfLife: 86_400, writeDelay: 60)
+        store.recordUse(of: "joy", query: "secretquery")
+        store.flush()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("secretquery"))
+        XCTAssertFalse(text.contains("queries"))
+        XCTAssertTrue(text.contains("joy"))
+
+        // Affinity lives only for this session.
+        XCTAssertGreaterThan(store.affinity(of: "joy", query: "secretquery"), 0)
+        XCTAssertEqual(UsageStore(fileURL: url, halfLife: 86_400).affinity(of: "joy", query: "secretquery"), 0)
+    }
+
+    func testLegacyQueriesAreDroppedOnLoad() throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = """
+        {"version":1,"emoji":{"joy":{"score":2,"updated":1800000000,"count":2}},        "queries":{"oldquery":{"joy":{"score":2,"updated":1800000000,"count":2}}}}
+        """
+        try Data(legacy.utf8).write(to: url)
+        let store = UsageStore(fileURL: url, halfLife: 86_400, writeDelay: 60)
+        XCTAssertEqual(store.top(1), ["joy"])
+        XCTAssertEqual(store.affinity(of: "joy", query: "oldquery"), 0)
+        store.flush() // waits for the migration rewrite queued at load
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("oldquery"))
+        XCTAssertFalse(text.contains("queries"))
+        XCTAssertTrue(text.contains("joy"))
+    }
+
+    func testSessionQueryMemoryIsBounded() {
+        let store = UsageStore(fileURL: url, halfLife: 86_400, writeDelay: 60)
+        for i in 0..<(UsageStore.maxQueryEntries + 50) { store.recordUse(of: "joy", query: "q\(i)") }
+        XCTAssertEqual(store.affinity(of: "joy", query: "q0"), 0, "oldest query evicted")
+        XCTAssertGreaterThan(store.affinity(of: "joy", query: "q\(UsageStore.maxQueryEntries + 49)"), 0)
     }
 
     func testDebouncedWriteHappensWithoutFlush() {
