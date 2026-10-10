@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 final class PickerPanelController {
     /// Called when the user clicks a suggestion.
-    var onPick: ((Emoji) -> Void)?
+    var onPick: ((Suggestion.Item) -> Void)?
     /// Called when the panel dismisses itself (e.g. click outside).
     var onDismiss: (() -> Void)?
 
@@ -51,7 +51,7 @@ final class PickerPanelController {
                                   isRefining: engine.isRefining, jevStatus: engine.jevStatus)
         }
         model.displayText = { [weak engine] emoji in engine?.output(for: emoji) ?? emoji.char }
-        model.onPick = { [weak self] emoji in self?.onPick?(emoji) }
+        model.onPick = { [weak self] item in self?.onPick?(item) }
         model.onCancel = { [weak self] in self?.dismiss() }
         model.onSearchTextChange = { [weak self] text in self?.searchTextChanged(text) }
         model.onSelectionChanged = { [weak self] in
@@ -448,7 +448,7 @@ extension PickerPanelController: PickerMouseHandling {
         guard model.mode == .inline else { return false }
         if let index = rowIndex(at: windowPoint) {
             model.selectRow(index)
-            onPick?(model.suggestions[index].emoji)
+            onPick?(model.suggestions[index].item)
         }
         return true
     }

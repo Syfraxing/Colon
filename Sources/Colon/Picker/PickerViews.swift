@@ -161,7 +161,7 @@ struct SuggestionList: View {
             VStack(spacing: 0) {
                 ForEach(Array(model.suggestions.enumerated()), id: \.element.id) { index, suggestion in
                     SuggestionRow(suggestion: suggestion,
-                                  glyph: model.displayText(suggestion.emoji),
+                                  displayText: model.displayText,
                                   query: model.query,
                                   isSelected: model.showsSelection && index == model.selectedIndex,
                                   pulse: model.insertPulse,
@@ -169,7 +169,7 @@ struct SuggestionList: View {
                                   theme: theme)
                         .id("row/\(suggestion.id)")
                         .contentShape(Rectangle())
-                        .modifier(RowInteraction(enabled: interactive, index: index, emoji: suggestion.emoji, model: model))
+                        .modifier(RowInteraction(enabled: interactive, index: index, item: suggestion.item, model: model))
                         .transition(.opacity)
                 }
             }
@@ -180,7 +180,7 @@ struct SuggestionList: View {
 private struct RowInteraction: ViewModifier {
     let enabled: Bool
     let index: Int
-    let emoji: Emoji
+    let item: Suggestion.Item
     let model: PickerModel
 
     func body(content: Content) -> some View {
@@ -189,7 +189,7 @@ private struct RowInteraction: ViewModifier {
                 .onContinuousHover { phase in
                     if case .active = phase { model.selectRow(index) }
                 }
-                .onTapGesture { model.pick(emoji) }
+                .onTapGesture { model.pick(item) }
         } else {
             content
         }
@@ -198,7 +198,7 @@ private struct RowInteraction: ViewModifier {
 
 struct SuggestionRow: View {
     let suggestion: Suggestion
-    let glyph: String
+    let displayText: (Emoji) -> String
     let query: String
     let isSelected: Bool
     let pulse: InsertPulse?
@@ -206,29 +206,44 @@ struct SuggestionRow: View {
     let theme: PickerTheme
 
     var body: some View {
-        let code = ShortcodeMatcher.displayShortcode(for: suggestion.emoji, query: query)
         HStack(spacing: 10) {
-            PulsingGlyph(glyph: glyph, id: suggestion.id, size: 22, selectedScale: 1.08,
-                         isSelected: isSelected, pulse: pulse, reduceMotion: reduceMotion)
+            SuggestionGlyph(suggestion: suggestion, displayText: displayText, size: 22, selectedScale: 1.08,
+                            isSelected: isSelected, pulse: pulse, reduceMotion: reduceMotion, theme: theme)
                 .frame(width: 26, height: 26)
-            ShortcodeText(code: code, query: query, theme: theme, isSelected: isSelected)
-                .layoutPriority(1)
-            Spacer(minLength: 8)
-            if let probability = suggestion.jevProbability {
-                JevMeter(probability: probability, isSelected: isSelected, theme: theme)
-            } else if !Self.nameRepeats(code: code, name: suggestion.emoji.name) {
-                // The full name, else the longest run of whole words that fits, else nothing:
-                // never "grinning fac…".
-                ViewThatFits(in: .horizontal) {
-                    ForEach(Self.wordPrefixes(of: suggestion.emoji.name), id: \.self) { name in
-                        nameText(name).fixedSize()
-                    }
-                    Color.clear.frame(width: 0, height: 0)
-                }
+            switch suggestion.item {
+            case .emoji(let emoji):
+                emojiDetails(emoji)
+            case .snippet(let snippet):
+                ShortcodeText(code: snippet.trigger, query: query, theme: theme, isSelected: isSelected, closes: false)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                // Text preview instead of a name: the row reads as "this expands to …".
+                nameText(SnippetPreview.oneLine(snippet.text))
+                    .truncationMode(.tail)
             }
         }
         .padding(.horizontal, 10)
         .frame(height: PickerMetrics.rowHeight)
+    }
+
+    @ViewBuilder
+    private func emojiDetails(_ emoji: Emoji) -> some View {
+        let code = ShortcodeMatcher.displayShortcode(for: emoji, query: query)
+        ShortcodeText(code: code, query: query, theme: theme, isSelected: isSelected)
+            .layoutPriority(1)
+        Spacer(minLength: 8)
+        if let probability = suggestion.jevProbability {
+            JevMeter(probability: probability, isSelected: isSelected, theme: theme)
+        } else if !Self.nameRepeats(code: code, name: emoji.name) {
+            // The full name, else the longest run of whole words that fits, else nothing:
+            // never "grinning fac…".
+            ViewThatFits(in: .horizontal) {
+                ForEach(Self.wordPrefixes(of: emoji.name), id: \.self) { name in
+                    nameText(name).fixedSize()
+                }
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
     }
 
     /// `:fire:` next to "fire" says nothing new.
@@ -265,12 +280,13 @@ struct SuggestionRow: View {
     }
 }
 
-/// `:shortcode:` in SF Mono with the matched part emphasised.
+/// `:shortcode:` in SF Mono with the matched part emphasised. Snippet triggers drop the closing colon.
 struct ShortcodeText: View {
     let code: String
     let query: String
     let theme: PickerTheme
     let isSelected: Bool
+    var closes = true
 
     var body: some View {
         Text(attributed)
@@ -300,10 +316,63 @@ struct ShortcodeText: View {
             run.append(ch)
         }
         flush()
-        var close = AttributedString(":")
-        close.foregroundColor = theme.tertiary
-        result += close
+        if closes {
+            var close = AttributedString(":")
+            close.foregroundColor = theme.tertiary
+            result += close
+        }
         return result
+    }
+}
+
+/// The glyph column: the emoji itself, or a text badge for a snippet.
+struct SuggestionGlyph: View {
+    let suggestion: Suggestion
+    let displayText: (Emoji) -> String
+    let size: CGFloat
+    let selectedScale: CGFloat
+    let isSelected: Bool
+    let pulse: InsertPulse?
+    let reduceMotion: Bool
+    let theme: PickerTheme
+
+    var body: some View {
+        switch suggestion.item {
+        case .emoji(let emoji):
+            PulsingGlyph(glyph: displayText(emoji), id: suggestion.id, size: size, selectedScale: selectedScale,
+                         isSelected: isSelected, pulse: pulse, reduceMotion: reduceMotion)
+        case .snippet:
+            SnippetBadge(size: size, theme: theme)
+                .scaleEffect(isSelected ? selectedScale : 1)
+                .animation(.pickerEase(0.16), value: isSelected)
+        }
+    }
+}
+
+/// Marks a snippet row: an accent quote mark on a soft tile where an emoji would be.
+struct SnippetBadge: View {
+    let size: CGFloat
+    let theme: PickerTheme
+
+    var body: some View {
+        Image(systemName: "text.quote")
+            .font(.system(size: size * 0.55, weight: .semibold))
+            .foregroundStyle(theme.accent)
+            .frame(width: size * 1.1, height: size * 1.1)
+            .background(
+                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+                    .fill(theme.accent.opacity(theme.isDark ? 0.18 : 0.14))
+            )
+    }
+}
+
+enum SnippetPreview {
+    /// The snippet on one line: line breaks shown as "↵", runs of whitespace collapsed.
+    static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline)
+            .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ↵ ")
     }
 }
 

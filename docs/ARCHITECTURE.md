@@ -62,6 +62,7 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 - Blend: when Jev answers, order by `0.7 * jevProbability + 0.3 * normalizedLocal` (tunable); keep exact shortcode matches pinned first only if Jev agrees within tolerance. Reorder animates in the UI. Once the user has moved the highlight (arrow keys) or pointed at a row with the mouse for the current query, freeze the order (the picker keeps the highlighted emoji selected even if a late Jev answer arrives; it may update probabilities but must not reorder under the user).
 - Debounce ~60 ms, cancel stale tasks, LRU cache by (query, app). Timeouts 1.5 s. On error, keep local results and set `jevStatus`.
 - No key or `useJev == false` → local only, still great.
+- Snippets: `SnippetSearch` matches the normalized query against `settings.snippets` triggers (case-insensitive): exact and prefix hits go above all emoji, "contains" hits (query ≥ 2 chars) below them; every hit keeps a row within `maxResults` (emoji give way). Snippets with empty text or an invalid trigger never match. While any snippet matches, Jev is not called for that query. See "Snippets" below.
 
 ### Picker UI
 - Non-activating `NSPanel` (`.nonactivatingPanel`, `.borderless`, `level = .popUpMenu`, `collectionBehavior = [.fullScreenAuxiliary, .transient]` — no `.canJoinAllSpaces`, it flashes on Space swipes; dismiss on `NSWorkspace.activeSpaceDidChangeNotification`), `hidesOnDeactivate = false`, never becomes key in inline mode.
@@ -70,7 +71,7 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 
 ### Shell
 - Menu bar item (template icon), menu: Enabled toggle, Open Picker (shows shortcut), Jev status line, Settings…, Quit.
-- Settings tabs: General (enable, trigger string, min chars, results count, skin tone, insertion method, auto replace, launch at login via `SMAppService.mainApp`), Jev (secure key field → `KeychainStore`, test button via `JevClient.ping`, use Jev toggle, send context toggle with privacy note), Shortcuts (`KeyboardShortcuts.Recorder` for `.openPicker`), Excluded Apps (list with icons, add from running apps or `NSOpenPanel` on /Applications, remove, restore defaults), About.
+- Settings tabs: General (enable, trigger string, min chars, results count, skin tone, insertion method, auto replace, launch at login via `SMAppService.mainApp`), Jev (secure key field → `KeychainStore`, test button via `JevClient.ping`, use Jev toggle, send context toggle with privacy note), Shortcuts (`KeyboardShortcuts.Recorder` for `.openPicker`), Snippets (trigger + multi-line text rows, add/delete, one-click starters Name/Email/Phone/Address/Signature), Excluded Apps (list with icons, add from running apps or `NSOpenPanel` on /Applications, remove, restore defaults), About.
 - Onboarding on first run / missing Accessibility: explains + button opening System Settings (`AXIsProcessTrustedWithOptions` prompt), polls until granted then calls `onAccessibilityGranted`, then optional Jev key step.
 
 ## Secrets
@@ -118,3 +119,11 @@ Ownership: **input** = `ColonCore/Input`, `ColonCore/Ranking` (recents), `Colon/
 - `configureEngine` syncs trigger, minimum, auto replace, `showsRecentsOnTrigger` and `horizontalLayout`, and resets the capture on any change.
 - Coordinator edits: each worker adds an `// MARK: v0.4 <worker>` block at the end of AppCoordinator and keeps edits inside existing methods to one line. `Feedback.inserted` is called by the coordinator in every insert path (Enter/Tab, keep-open, shortcode, mouse, search); several of those run inside the tap callback, so it only queues the click (`DispatchQueue.main.async`). The click voices are built when `playsInsertSound` is on (at launch and when it is turned on), never inside the callback. Haptics only on real selection index changes.
 - PracticeField belongs to input (handles keep-open).
+
+## Snippets
+
+- Model: `Snippet { id: UUID, trigger, text }` (`ColonCore/Model/Snippet.swift`), persisted as JSON under `AppSettings.snippets` (UserDefaults key `snippets`, local only). `Snippet.problem(with:among:excluding:)` validates triggers: non-empty, no whitespace, only query characters (`TriggerEngine.isQueryCharacter`), ≤ `TriggerEngine.maxQueryLength`, unique ignoring case. The Settings row keeps an invalid draft local and saves only valid triggers.
+- `Suggestion.item` is `.emoji(Emoji)` or `.snippet(Snippet)`; `Suggestion.id` is the emoji id or `snippet:<uuid>`. `suggestion.emoji` is nil for snippets. Picks flow as `Suggestion.Item` (`PickerModel.onPick`, `PickerPanelController.onPick`); `SuggestionEngine.output(for: item)` returns the snippet text verbatim and `recordUse(item)` ignores snippets (no usage history).
+- Privacy: snippet text and triggers are never sent to Jev (Jev is skipped for any query a snippet matches; Jev candidates come from the emoji pool only), never logged, never added to `UsageStore`.
+- Insertion: `Inserter.replace` pastes any text containing a line break regardless of the insertion method (a typed newline can act as Return in chat apps); the pasteboard is restored as for emoji.
+- UI: snippet rows show a quote badge instead of a glyph, `:trigger` (no closing colon) and a one-line text preview; never a Jev meter. Same in compact layout, hotkey search (shares the engine's list) and the onboarding practice field. The bare-trigger recents strip never contains snippets. `:trigger:` auto-replace stays emoji-only.

@@ -65,6 +65,9 @@ public final class SuggestionEngine: ObservableObject {
     private var context = PredictionContext()
     /// Local matches for the current query (larger than what is shown), used for blending.
     private var localPool: [Suggestion] = []
+    /// The user's snippets matching the current query. While any match, Jev is not asked, so
+    /// nothing resembling a trigger leaves the Mac alongside them.
+    private var snippetHits: [SnippetSearch.Hit] = []
     /// Set when the user moved the highlight; later Jev answers must not reorder rows.
     private var orderFrozen = false
     private var cancellables = Set<AnyCancellable>()
@@ -92,7 +95,8 @@ public final class SuggestionEngine: ObservableObject {
     /// Recompute local results synchronously, then (debounced) ask Jev to rerank.
     /// The same query with only a new context (e.g. the AX anchor/text arriving late) keeps the
     /// local results and just reschedules Jev. The raw empty query (the bare trigger) publishes the
-    /// recents strip and never calls Jev.
+    /// recents strip and never calls Jev. Snippets whose trigger matches are merged in
+    /// (`SnippetSearch.merge`); while any snippet matches, Jev is skipped.
     public func update(query: String, context: PredictionContext) {
         let normalized = EmojiSearch.normalize(query)
         let sameQuery = !normalized.isEmpty && normalized == EmojiSearch.normalize(self.query)
@@ -105,6 +109,7 @@ public final class SuggestionEngine: ObservableObject {
 
         guard !normalized.isEmpty else {
             localPool = []
+            snippetHits = []
             guard query.isEmpty else {
                 // Only the bare trigger shows recents; text that normalises away (`::`, spaces) shows nothing.
                 suggestions = []
@@ -123,10 +128,11 @@ public final class SuggestionEngine: ObservableObject {
         if !sameQuery {
             orderFrozen = false
             localPool = search.search(normalized, limit: Self.localPoolSize, boosts: boosts)
-            suggestions = Array(localPool.prefix(maxResults))
+            snippetHits = SnippetSearch.search(normalized, in: settings.snippets)
+            suggestions = SnippetSearch.merge(snippetHits, into: Array(localPool.prefix(maxResults)), limit: maxResults)
         }
 
-        guard normalized.count >= Self.minimumJevQueryLength, let ranker = currentRanker() else { return }
+        guard snippetHits.isEmpty, normalized.count >= Self.minimumJevQueryLength, let ranker = currentRanker() else { return }
         let key = CacheKey(query: normalized, app: context.bundleID ?? context.appName ?? "",
                            textHash: context.textBeforeTrigger.map { $0.hashValue } ?? 0)
         if let cached = cache[key] {
@@ -184,6 +190,7 @@ public final class SuggestionEngine: ObservableObject {
         query = ""
         context = PredictionContext()
         localPool = []
+        snippetHits = []
         suggestions = []
         orderFrozen = false
     }
@@ -215,6 +222,20 @@ public final class SuggestionEngine: ObservableObject {
         usage.recordUse(of: emoji.id, query: normalized.isEmpty ? nil : normalized)
     }
 
+    /// Call after the user inserts a suggestion. Snippet picks are not recorded (personal data
+    /// stays out of the usage history).
+    public func recordUse(_ item: Suggestion.Item) {
+        if case .emoji(let emoji) = item { recordUse(emoji) }
+    }
+
+    /// The text to insert for a picked suggestion: the emoji (skin tone applied) or the snippet text.
+    public func output(for item: Suggestion.Item) -> String {
+        switch item {
+        case .emoji(let emoji): output(for: emoji)
+        case .snippet(let snippet): snippet.text
+        }
+    }
+
     /// The string to insert for `emoji`, with the preferred skin tone applied when supported.
     public func output(for emoji: Emoji) -> String {
         Self.applying(settings.skinTone, to: emoji)
@@ -241,13 +262,15 @@ public final class SuggestionEngine: ObservableObject {
     private func apply(_ probabilities: [String: Double]) {
         if orderFrozen {
             suggestions = suggestions.map { suggestion in
+                guard suggestion.emoji != nil else { return suggestion }
                 var updated = suggestion
                 updated.jevProbability = probabilities[suggestion.id] ?? 0
                 return updated
             }
             return
         }
-        suggestions = Self.blend(local: localPool, probabilities: probabilities, store: store, limit: maxResults)
+        let emoji = Self.blend(local: localPool, probabilities: probabilities, store: store, limit: maxResults)
+        suggestions = SnippetSearch.merge(snippetHits, into: emoji, limit: maxResults)
     }
 
     /// `0.7 * p + 0.3 * local / bestLocal`; an exact-shortcode top hit stays first while Jev roughly agrees.
@@ -262,8 +285,10 @@ public final class SuggestionEngine: ObservableObject {
         for (rank, item) in local.enumerated() {
             let p = probabilities[item.id] ?? 0
             let normalizedLocal = bestLocal > 0 ? item.score / bestLocal : 0
-            blended.append((Suggestion(emoji: item.emoji, score: jevWeight * p + localWeight * normalizedLocal,
-                                       jevProbability: p), rank))
+            var blendedItem = item
+            blendedItem.score = jevWeight * p + localWeight * normalizedLocal
+            blendedItem.jevProbability = p
+            blended.append((blendedItem, rank))
             seen.insert(item.id)
         }
         for (id, p) in probabilities where !seen.contains(id) && p >= jevOnlyThreshold {
@@ -292,7 +317,7 @@ public final class SuggestionEngine: ObservableObject {
         func add(_ emoji: Emoji) {
             if pool.count < Self.maxCandidates, seen.insert(emoji.id).inserted { pool.append(emoji) }
         }
-        localPool.prefix(Self.localCandidates).forEach { add($0.emoji) }
+        localPool.prefix(Self.localCandidates).compactMap(\.emoji).forEach(add)
         usage.top(Self.frecentCandidates).compactMap { store.emoji(id: $0) }.forEach(add)
         popular.forEach(add)
         return pool

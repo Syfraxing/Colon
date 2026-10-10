@@ -61,7 +61,7 @@ final class PickerModel: ObservableObject {
     var snapshotProvider: () -> PickerSnapshot = { PickerSnapshot(query: "", suggestions: [], isRefining: false, jevStatus: .idle) }
     /// The glyph to show and insert (skin tone applied).
     var displayText: (Emoji) -> String = { $0.char }
-    var onPick: ((Emoji) -> Void)?
+    var onPick: ((Suggestion.Item) -> Void)?
     var onCancel: (() -> Void)?
     var onSearchTextChange: ((String) -> Void)?
     /// After every engine sync, so the controller can hide on an empty list.
@@ -93,8 +93,8 @@ final class PickerModel: ObservableObject {
         return section.emoji.indices.contains(gridSelection.item) ? section.emoji[gridSelection.item] : nil
     }
 
-    /// The emoji Return would insert right now.
-    var currentEmoji: Emoji? { isGridVisible ? selectedGridEmoji : selectedSuggestion?.emoji }
+    /// The emoji or snippet Return would insert right now.
+    var currentItem: Suggestion.Item? { isGridVisible ? selectedGridEmoji.map(Suggestion.Item.emoji) : selectedSuggestion?.item }
 
     /// The trigger alone: the list holds the user's most-used emoji rather than matches.
     var isRecents: Bool { mode == .inline && query.isEmpty && !suggestions.isEmpty }
@@ -326,10 +326,10 @@ final class PickerModel: ObservableObject {
 
     func pickCurrent() {
         syncIfNeeded()
-        if let emoji = currentEmoji { onPick?(emoji) }
+        if let item = currentItem { onPick?(item) }
     }
 
-    func pick(_ emoji: Emoji) {
-        onPick?(emoji)
+    func pick(_ item: Suggestion.Item) {
+        onPick?(item)
     }
 }

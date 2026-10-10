@@ -2,7 +2,7 @@ import ColonCore
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, jev, shortcuts, excludedApps, about
+    case general, jev, shortcuts, snippets, excludedApps, about
 
     var id: Self { self }
 
@@ -11,6 +11,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "General"
         case .jev: "Jev"
         case .shortcuts: "Shortcuts"
+        case .snippets: "Snippets"
         case .excludedApps: "Excluded Apps"
         case .about: "About"
         }
@@ -21,6 +22,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "gearshape.fill"
         case .jev: "sparkles"
         case .shortcuts: "command"
+        case .snippets: "text.quote"
         case .excludedApps: "nosign"
         case .about: "info.circle.fill"
         }
@@ -31,6 +33,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: Color(white: 0.55)
         case .jev: ShellTheme.accent
         case .shortcuts: Color(red: 0.55, green: 0.45, blue: 0.95)
+        case .snippets: Color(red: 0.30, green: 0.72, blue: 0.55)
         case .excludedApps: Color(red: 0.95, green: 0.42, blue: 0.40)
         case .about: Color(red: 0.35, green: 0.70, blue: 0.85)
         }
@@ -85,6 +88,8 @@ struct SettingsView: View {
             JevSettingsView(settings: settings, key: jevKey, engine: engine)
         case .shortcuts:
             ShortcutsSettingsView(settings: settings)
+        case .snippets:
+            SnippetsSettingsView(settings: settings)
         case .excludedApps:
             ExcludedAppsSettingsView(settings: settings)
         case .about:

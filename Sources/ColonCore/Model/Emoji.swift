@@ -57,19 +57,51 @@ public enum SkinTone: Int, CaseIterable, Codable, Sendable {
     }
 }
 
-/// A ranked candidate shown in the picker.
+/// A ranked candidate shown in the picker: an emoji, or one of the user's text snippets.
 public struct Suggestion: Hashable, Sendable, Identifiable {
-    public var id: String { emoji.id }
-    public let emoji: Emoji
+    public enum Item: Hashable, Sendable {
+        case emoji(Emoji)
+        case snippet(Snippet)
+    }
+
+    public let item: Item
     /// Final blended score used for ordering (higher is better).
     public var score: Double
-    /// Probability Jev assigned to this emoji, nil until Jev has answered.
+    /// Probability Jev assigned to this emoji, nil until Jev has answered. Always nil for snippets.
     public var jevProbability: Double?
 
+    /// `Emoji.id` for emoji; `snippet:<uuid>` for snippets (emoji ids never contain `:`).
+    public var id: String {
+        switch item {
+        case .emoji(let emoji): emoji.id
+        case .snippet(let snippet): "snippet:" + snippet.id.uuidString
+        }
+    }
+
+    public var emoji: Emoji? {
+        switch item {
+        case .emoji(let emoji): emoji
+        case .snippet: nil
+        }
+    }
+
+    public var snippet: Snippet? {
+        switch item {
+        case .emoji: nil
+        case .snippet(let snippet): snippet
+        }
+    }
+
     public init(emoji: Emoji, score: Double, jevProbability: Double? = nil) {
-        self.emoji = emoji
+        self.item = .emoji(emoji)
         self.score = score
         self.jevProbability = jevProbability
+    }
+
+    public init(snippet: Snippet, score: Double) {
+        self.item = .snippet(snippet)
+        self.score = score
+        self.jevProbability = nil
     }
 }
 

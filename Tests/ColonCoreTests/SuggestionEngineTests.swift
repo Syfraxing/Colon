@@ -85,7 +85,7 @@ final class SuggestionEngineTests: XCTestCase {
         let engine = makeEngine()
         engine.update(query: "fire", context: PredictionContext())
         XCTAssertEqual(engine.query, "fire")
-        XCTAssertEqual(engine.suggestions.first?.emoji.char, "🔥")
+        XCTAssertEqual(engine.suggestions.first?.emoji?.char, "🔥")
         XCTAssertLessThanOrEqual(engine.suggestions.count, 8)
         XCTAssertTrue(engine.isRefining)
     }
