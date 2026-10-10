@@ -36,6 +36,8 @@ public final class SuggestionEngine: ObservableObject {
     static let localCandidates = 24
     static let frecentCandidates = 16
     static let maxCandidates = 140
+    /// Shorter queries are too ambiguous to be worth a network round trip.
+    public nonisolated static let minimumJevQueryLength = 2
 
     /// Delay before asking Jev, so fast typing sends one request.
     var debounce: Duration = .milliseconds(60)
@@ -47,8 +49,10 @@ public final class SuggestionEngine: ObservableObject {
     private let injectedJev: JevRanking?
     private let popular: [Emoji]
 
-    private var client: (key: String, ranker: JevClient)?
-    private var keyCheckedAt: ContinuousClock.Instant?
+    /// Built from the key cached by `reloadAPIKey()`; the engine never reads the Keychain per query.
+    private var client: JevClient?
+    private var keyLoaded = false
+    private var keyLoad: Task<Void, Never>?
     private var lastNetworkUse: ContinuousClock.Instant?
     private var cache = LRUCache<CacheKey, [String: Double]>(capacity: 64)
     private var task: Task<Void, Never>?
@@ -60,7 +64,7 @@ public final class SuggestionEngine: ObservableObject {
     private var orderFrozen = false
     private var cancellables = Set<AnyCancellable>()
 
-    /// `jev` nil means: build a `JevClient` from `KeychainStore.jevAPIKey` on demand.
+    /// `jev` nil means: use a `JevClient` for the key `reloadAPIKey()` loads (started here).
     public init(settings: AppSettings, store: EmojiStore = .shared, usage: UsageStore = .shared, jev: JevRanking? = nil) {
         self.settings = settings
         self.store = store
@@ -68,7 +72,8 @@ public final class SuggestionEngine: ObservableObject {
         self.injectedJev = jev
         search = EmojiSearch(store: store, usage: usage)
         popular = PopularEmoji.ids.compactMap { store.emoji(id: $0) }
-        jevStatus = baseStatus(refreshKey: true) ?? .idle
+        jevStatus = settings.useJev ? .idle : .disabled
+        if jev == nil { reloadAPIKey() }
 
         settings.$useJev
             .dropFirst()
@@ -80,25 +85,33 @@ public final class SuggestionEngine: ObservableObject {
     }
 
     /// Recompute local results synchronously, then (debounced) ask Jev to rerank.
+    /// The same query with only a new context (e.g. the AX anchor/text arriving late) keeps the
+    /// local results and just reschedules Jev.
     public func update(query: String, context: PredictionContext) {
+        let normalized = EmojiSearch.normalize(query)
+        let sameQuery = !normalized.isEmpty && normalized == EmojiSearch.normalize(self.query)
         let startingSession = self.query.isEmpty
+        let context = sanitized(context)
+        if sameQuery && context == self.context { return }
         cancelPending()
         self.query = query
         self.context = context
-        orderFrozen = false
 
-        let normalized = EmojiSearch.normalize(query)
         guard !normalized.isEmpty else {
             localPool = []
             suggestions = []
+            orderFrozen = false
             return
         }
 
         let boosts = usage.snapshot(query: normalized)
-        localPool = search.search(normalized, limit: Self.localPoolSize, boosts: boosts)
-        suggestions = Array(localPool.prefix(maxResults))
+        if !sameQuery {
+            orderFrozen = false
+            localPool = search.search(normalized, limit: Self.localPoolSize, boosts: boosts)
+            suggestions = Array(localPool.prefix(maxResults))
+        }
 
-        guard let ranker = currentRanker() else { return }
+        guard normalized.count >= Self.minimumJevQueryLength, let ranker = currentRanker() else { return }
         let key = CacheKey(query: normalized, app: context.bundleID ?? context.appName ?? "",
                            textHash: context.textBeforeTrigger.map { $0.hashValue } ?? 0)
         if let cached = cache[key] {
@@ -131,6 +144,23 @@ public final class SuggestionEngine: ObservableObject {
                 self.jevStatus = .error(Self.describe(error))
             }
         }
+    }
+
+    /// Reads the Jev key from the Keychain off the main thread and caches it. Call at launch
+    /// (the initializer does) and after Settings saves or deletes a key.
+    @discardableResult
+    public func reloadAPIKey() -> Task<Void, Never> {
+        keyLoad?.cancel()
+        let task = Task { [weak self] in
+            let key = await Task.detached(priority: .userInitiated) { KeychainStore.jevAPIKey }.value
+            guard let self, !Task.isCancelled else { return }
+            self.client = key.map { JevClient(apiKey: $0) }
+            self.keyLoaded = true
+            self.cache.removeAll()
+            self.refreshStatus()
+        }
+        keyLoad = task
+        return task
     }
 
     /// Clear query/results and cancel any in-flight Jev request.
@@ -248,38 +278,38 @@ public final class SuggestionEngine: ObservableObject {
 
     /// The ranker to use now, or nil (with `jevStatus` updated) when Jev is off or has no key.
     private func currentRanker() -> JevRanking? {
-        if let status = baseStatus(refreshKey: false) {
+        if let status = unavailableStatus() {
             jevStatus = status
             return nil
         }
-        if case .disabled = jevStatus { jevStatus = .idle }
-        if case .noKey = jevStatus { jevStatus = .idle }
-        return injectedJev ?? client?.ranker
+        if jevStatus == .disabled || jevStatus == .noKey { jevStatus = .idle }
+        return injectedJev ?? client
     }
 
-    /// `.disabled` / `.noKey` when Jev can't be used, nil when it can. Re-reads the Keychain at most every 2 s.
-    private func baseStatus(refreshKey force: Bool) -> JevStatus? {
+    /// `.disabled` / `.noKey` when Jev can't be used, nil when it can.
+    private func unavailableStatus() -> JevStatus? {
         guard settings.useJev else { return .disabled }
         if injectedJev != nil { return nil }
-        let now = ContinuousClock.now
-        if force || keyCheckedAt.map({ now - $0 > .seconds(2) }) ?? true {
-            keyCheckedAt = now
-            if let key = KeychainStore.jevAPIKey {
-                if client?.key != key { client = (key, JevClient(apiKey: key)) }
-            } else {
-                client = nil
-            }
-        }
+        // Until the first key load finishes, stay quiet rather than flashing "no key".
+        if !keyLoaded { return jevStatus == .disabled ? .idle : jevStatus }
         return client == nil ? .noKey : nil
     }
 
     private func refreshStatus() {
-        if let status = baseStatus(refreshKey: true) {
+        if let status = unavailableStatus() {
             cancelPending()
             jevStatus = status
         } else if jevStatus == .disabled || jevStatus == .noKey {
             jevStatus = .idle
         }
+    }
+
+    /// Text before the trigger only goes to Jev when the user opted in.
+    private func sanitized(_ context: PredictionContext) -> PredictionContext {
+        guard !settings.sendTextContext, context.textBeforeTrigger != nil else { return context }
+        var context = context
+        context.textBeforeTrigger = nil
+        return context
     }
 
     private func needsWarmUp() -> Bool {
@@ -321,6 +351,11 @@ struct LRUCache<Key: Hashable, Value> {
     }
 
     var count: Int { values.count }
+
+    mutating func removeAll() {
+        values.removeAll()
+        order.removeAll()
+    }
 
     subscript(key: Key) -> Value? {
         mutating get {

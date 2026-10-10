@@ -15,7 +15,7 @@ public extension JevRanking {
 public enum JevError: Error, Equatable, Sendable {
     case missingKey
     case unauthorized          // 401
-    case validation(String)    // 422
+    case validation            // 422 (server details are never surfaced)
     case rateLimited           // 429
     case overloaded            // 529
     case http(Int)
@@ -27,7 +27,7 @@ extension JevError: LocalizedError {
         switch self {
         case .missingKey: "No Jev API key"
         case .unauthorized: "Invalid Jev API key"
-        case .validation(let message): "Jev rejected the request: \(message)"
+        case .validation: "Jev rejected the request"
         case .rateLimited: "Jev rate limit reached"
         case .overloaded: "Jev is overloaded"
         case .http(let status): "Jev HTTP \(status)"
@@ -59,13 +59,12 @@ public struct JevClient: JevRanking {
     /// One shared session: keep-alive connection reuse is what makes repeated calls ~150 ms.
     public static let sharedSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForRequest = 5
         configuration.timeoutIntervalForResource = 5
         configuration.waitsForConnectivity = false
         configuration.httpMaximumConnectionsPerHost = 4
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.httpShouldUsePipelining = true
         return URLSession(configuration: configuration)
     }()
 
@@ -101,7 +100,8 @@ public struct JevClient: JevRanking {
     public func ping() async throws -> Duration {
         let clock = ContinuousClock()
         let start = clock.now
-        _ = try await send(Self.pingBody())
+        // A cold ping includes DNS + TLS setup, so it gets more room than a rank request.
+        _ = try await send(Self.pingBody(), timeout: 5)
         return clock.now - start
     }
 
@@ -114,10 +114,10 @@ public struct JevClient: JevRanking {
 
     // MARK: - Transport
 
-    private func send(_ body: Data) async throws -> ResponseBody {
+    private func send(_ body: Data, timeout: TimeInterval = JevClient.timeout) async throws -> ResponseBody {
         guard !apiKey.isEmpty else { throw JevError.missingKey }
         var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData,
-                                 timeoutInterval: Self.timeout)
+                                 timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -134,40 +134,17 @@ public struct JevClient: JevRanking {
                 throw JevError.decoding
             }
         case 401, 403: throw JevError.unauthorized
-        case 422, 400: throw JevError.validation(Self.errorMessage(from: data))
+        case 422, 400: throw JevError.validation
         case 429: throw JevError.rateLimited
         case 529, 503: throw JevError.overloaded
         default: throw JevError.http(http.statusCode)
         }
     }
 
-    /// Best-effort human message from an error body (`{"detail": ...}`, `{"error": {"message": ...}}`, ...).
-    static func errorMessage(from data: Data) -> String {
-        if let object = try? JSONSerialization.jsonObject(with: data) {
-            if let message = findMessage(in: object) { return String(message.prefix(300)) }
-        }
-        let text = String(decoding: data.prefix(300), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "invalid request" : text
-    }
-
-    private static func findMessage(in object: Any) -> String? {
-        if let text = object as? String { return text }
-        if let dictionary = object as? [String: Any] {
-            for key in ["message", "detail", "error", "msg"] {
-                if let value = dictionary[key], let message = findMessage(in: value) { return message }
-            }
-        }
-        if let array = object as? [Any] {
-            let messages = array.compactMap { findMessage(in: $0) }
-            if !messages.isEmpty { return messages.joined(separator: "; ") }
-        }
-        return nil
-    }
-
     // MARK: - Encoding
 
     /// Option text for an emoji: `"<char> <name>; <keywords>"`.
-    public static func criterion(for emoji: Emoji, maxKeywords: Int = 8) -> String {
+    public static func criterion(for emoji: Emoji, maxKeywords: Int = 6) -> String {
         let nameWords = Set(EmojiStore.words(in: emoji.name))
         let extra = emoji.keywords.filter { !nameWords.contains($0) }.prefix(maxKeywords)
         var text = "\(emoji.char) \(emoji.name)"
