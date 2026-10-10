@@ -46,11 +46,22 @@ public enum SearchLanguages {
         return codes.filter { supportedSet.contains($0) && seen.insert($0).inserted }
     }
 
-    /// `Română` (`Romanian`): the language's own name, then the name in the UI language when different.
+    /// The language's own name (`Română`) and, when it differs, the name in the UI language
+    /// (`Romanian`); both title-cased since CLDR lowercases some (`română`, `español`).
+    public static func localizedNames(for code: String, in locale: Locale = .current) -> (native: String, local: String?) {
+        let native = titleCased(Locale(identifier: code).localizedString(forIdentifier: code) ?? code)
+        let local = titleCased(locale.localizedString(forIdentifier: code) ?? code)
+        return (native, native.lowercased() == local.lowercased() ? nil : local)
+    }
+
+    /// `Română (Romanian)`: `localizedNames` on one line.
     public static func displayName(for code: String, in locale: Locale = .current) -> String {
-        let native = Locale(identifier: code).localizedString(forIdentifier: code) ?? code
-        let local = locale.localizedString(forIdentifier: code) ?? code
-        let nativeTitle = native.prefix(1).uppercased() + native.dropFirst()
-        return nativeTitle.lowercased() == local.lowercased() ? nativeTitle : "\(nativeTitle) (\(local))"
+        let names = localizedNames(for: code, in: locale)
+        guard let local = names.local else { return names.native }
+        return "\(names.native) (\(local))"
+    }
+
+    private static func titleCased(_ name: String) -> String {
+        name.prefix(1).uppercased() + name.dropFirst()
     }
 }

@@ -215,6 +215,8 @@ struct Footnote: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
+            // Grouped-form footers lay their text out trailing on macOS; wrapped lines must stay leading.
+            .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -196,40 +196,83 @@ private struct SearchLanguagesRow: View {
     @ObservedObject var settings: AppSettings
     @State private var showsPicker = false
 
-    private static let languages: [(code: String, name: String)] = SearchLanguages.supported
-        .map { ($0, SearchLanguages.displayName(for: $0)) }
-        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    private struct Language: Identifiable {
+        let code: String
+        let native: String
+        let local: String?
+        var id: String { code }
+    }
+
+    /// Sorted by the language's own name, like Language & Region's "Add Language" list.
+    private static let languages: [Language] = SearchLanguages.supported
+        .map { code in
+            let names = SearchLanguages.localizedNames(for: code)
+            return Language(code: code, native: names.native, local: names.local)
+        }
+        .sorted { $0.native.localizedStandardCompare($1.native) == .orderedAscending }
 
     var body: some View {
         LabeledContent {
             Button("Choose…") { showsPicker.toggle() }
                 .popover(isPresented: $showsPicker, arrowEdge: .trailing) { picker }
+                .accessibilityLabel("Choose search languages")
         } label: {
             Text(summary)
             Text("Find emoji by their names in these languages too, e.g. \(settings.triggerString)inima → ❤️ in Romanian. Accents are optional; shortcodes always work.")
         }
     }
 
+    /// "English, Spanish, and Romanian": names in the UI language, in the order they were chosen.
     private var summary: String {
-        (["English"] + settings.searchLanguages.map { SearchLanguages.displayName(for: $0) })
-            .joined(separator: ", ")
+        let names = settings.searchLanguages.map { code in
+            let names = SearchLanguages.localizedNames(for: code)
+            return names.local ?? names.native
+        }
+        return (["English"] + names).formatted(.list(type: .and))
     }
 
     private var picker: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("English", isOn: .constant(true))
-                    .disabled(true)
-                    .help("English names and shortcodes are always searched.")
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: .constant(true)) {
+                    LanguageLabel(native: "English", local: nil)
+                }
+                .disabled(true)
+                .help("English names and shortcodes are always searched.")
+                .accessibilityHint("Always on")
                 Divider()
-                ForEach(Self.languages, id: \.code) { language in
-                    Toggle(language.name, isOn: binding(for: language.code))
+                ForEach(Self.languages) { language in
+                    Toggle(isOn: binding(for: language.code)) {
+                        LanguageLabel(native: language.native, local: language.local)
+                    }
+                    .accessibilityLabel(SearchLanguages.displayName(for: language.code))
                 }
             }
             .toggleStyle(.checkbox)
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
-        .frame(width: 260, height: 360)
+        .frame(width: 336, height: 380)
+    }
+
+    /// One line per language: own name first, then the name in the UI language in secondary
+    /// colour. The secondary part truncates first, so rows never wrap.
+    private struct LanguageLabel: View {
+        let native: String
+        let local: String?
+
+        var body: some View {
+            HStack(spacing: 6) {
+                Text(native)
+                    .fixedSize()
+                if let local {
+                    Text(local)
+                        .foregroundStyle(.secondary)
+                        .truncationMode(.tail)
+                }
+            }
+            .lineLimit(1)
+        }
     }
 
     private func binding(for code: String) -> Binding<Bool> {
