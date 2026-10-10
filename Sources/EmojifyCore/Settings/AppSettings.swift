@@ -68,7 +68,7 @@ public final class AppSettings: ObservableObject {
             Key.minQueryLength: 1,
             Key.maxResults: 8,
             Key.useJev: true,
-            Key.sendTextContext: true,
+            Key.sendTextContext: false,
             Key.excludedBundleIDs: Self.defaultExcludedBundleIDs,
             Key.autoReplaceOnClosingTrigger: true,
             Key.skinTone: SkinTone.none.rawValue,
