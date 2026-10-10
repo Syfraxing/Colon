@@ -37,7 +37,7 @@ final class PracticeController: ObservableObject {
         trigger.minQueryLength = settings.minQueryLength
         trigger.autoReplaceOnClosingTrigger = settings.autoReplaceOnClosingTrigger
 
-        let result = trigger.handle(input)
+        let result = trigger.handle(input, pickerVisible: isShowing && !visibleSuggestions.isEmpty)
         switch result.action {
         case .none:
             break
@@ -69,7 +69,7 @@ final class PracticeController: ObservableObject {
     }
 
     func select(_ suggestion: Suggestion, in textView: NSTextView) {
-        let deleteCount = settings.triggerString.count + (trigger.query?.count ?? 0)
+        let deleteCount = trigger.typedLength ?? 0
         insert(engine.output(for: suggestion.emoji), replacing: deleteCount, in: textView)
         hide()
     }
@@ -147,7 +147,7 @@ private struct PracticeSuggestions: View {
                         .padding(.vertical, 14)
                 } else {
                     ForEach(Array(suggestions.prefix(5).enumerated()), id: \.element.id) { index, suggestion in
-                        SuggestionRow(suggestion: suggestion, isSelected: index == controller.selectedIndex)
+                        PracticeSuggestionRow(suggestion: suggestion, isSelected: index == controller.selectedIndex)
                     }
                 }
             }
@@ -180,7 +180,7 @@ private struct PracticeSuggestions: View {
     }
 }
 
-private struct SuggestionRow: View {
+private struct PracticeSuggestionRow: View {
     let suggestion: Suggestion
     let isSelected: Bool
 

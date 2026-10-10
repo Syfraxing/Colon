@@ -21,16 +21,6 @@ protocol InputControllerDelegate: AnyObject {
     func inputPickerIsVisible() -> Bool
 }
 
-extension InputControllerDelegate {
-    /// Fallback until the coordinator asks the picker: any visible panel of ours.
-    func inputIsPointInPicker(_ point: CGPoint) -> Bool {
-        NSApp.windows.contains { $0 is NSPanel && $0.isVisible && $0.frame.contains(point) }
-    }
-
-    /// Fallback: trust that the picker is up whenever the input layer has shown it.
-    func inputPickerIsVisible() -> Bool { true }
-}
-
 /// Owns the CGEventTap, runs `TriggerEngine`, honours exclusions/secure input,
 /// and performs the deletion + insertion. OWNER: input worker.
 ///

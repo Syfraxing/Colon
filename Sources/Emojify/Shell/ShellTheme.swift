@@ -45,7 +45,7 @@ struct VisualEffectBackground: NSViewRepresentable {
 }
 
 /// A rounded glass card: Liquid Glass on macOS 26+, a translucent fill with hairline otherwise.
-struct GlassCard: ViewModifier {
+struct ShellGlassCard: ViewModifier {
     var cornerRadius: CGFloat = ShellTheme.cornerRadius
 
     func body(content: Content) -> some View {
@@ -63,7 +63,7 @@ struct GlassCard: ViewModifier {
 
 extension View {
     func glassCard(cornerRadius: CGFloat = ShellTheme.cornerRadius) -> some View {
-        modifier(GlassCard(cornerRadius: cornerRadius))
+        modifier(ShellGlassCard(cornerRadius: cornerRadius))
     }
 }
 

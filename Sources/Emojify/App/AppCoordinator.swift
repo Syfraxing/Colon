@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import EmojifyCore
 import KeyboardShortcuts
 
@@ -14,18 +15,29 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     private(set) lazy var engine = SuggestionEngine(settings: settings)
     private lazy var input = InputController(settings: settings)
     private lazy var picker = PickerPanelController(engine: engine, settings: settings)
-    private lazy var settingsWindow = SettingsWindowController(settings: settings)
+    private lazy var settingsWindow = SettingsWindowController(settings: settings, engine: engine)
     private var statusItem: StatusItemController?
+    private var cancellables: Set<AnyCancellable> = []
 
     /// App that was frontmost when search mode opened; receives the picked emoji.
     private var searchTargetApp: NSRunningApplication?
 
     func start() {
-        statusItem = StatusItemController(settings: settings, engine: engine)
-        statusItem?.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
-        statusItem?.onQuit = { NSApp.terminate(nil) }
+        // Load the dataset now: the tap callback must never pay for the first JSON load.
+        _ = EmojiStore.shared.all.count
+
+        let statusItem = StatusItemController(settings: settings, engine: engine)
+        self.statusItem = statusItem
+        statusItem.onOpenSettings = { [weak self] in self?.openSettingsOrOnboarding() }
+        statusItem.onOpenPicker = { [weak self] in self?.toggleSearch() }
+        statusItem.onQuit = { NSApp.terminate(nil) }
 
         input.delegate = self
+        input.$status
+            .receive(on: RunLoop.main)
+            .sink { [weak statusItem] status in statusItem?.update(inputStatus: status) }
+            .store(in: &cancellables)
+
         picker.onPick = { [weak self] emoji in self?.handleMousePick(emoji) }
         picker.onDismiss = { [weak self] in
             self?.input.cancelTracking()
@@ -34,7 +46,8 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         }
 
         settingsWindow.onAccessibilityGranted = { [weak self] in self?.input.start() }
-        KeyboardShortcuts.onKeyUp(for: .openPicker) { [weak self] in self?.openSearch() }
+        settingsWindow.onAPIKeyChanged = { [weak self] in self?.engine.reloadAPIKey() }
+        KeyboardShortcuts.onKeyUp(for: .openPicker) { [weak self] in self?.toggleSearch() }
 
         input.start()
         settingsWindow.showOnboardingIfNeeded()
@@ -42,12 +55,32 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     /// Re-opening the app from Finder/Spotlight while it runs shows Settings.
     func handleReopen() {
-        settingsWindow.show()
+        openSettingsOrOnboarding()
     }
 
-    private func openSearch() {
+    func willTerminate() {
+        input.stop()
+        UsageStore.shared.flush()
+    }
+
+    private func openSettingsOrOnboarding() {
+        if input.status == .noPermission {
+            settingsWindow.showOnboardingIfNeeded()
+        } else {
+            settingsWindow.show()
+        }
+    }
+
+    private func toggleSearch() {
+        if picker.isVisible, searchTargetApp != nil {
+            picker.hide()
+            engine.reset()
+            searchTargetApp = nil
+            return
+        }
         guard settings.isEnabled else { return }
         input.cancelTracking()
+        picker.hide()
         searchTargetApp = NSWorkspace.shared.frontmostApplication
         engine.reset()
         picker.showSearch()
@@ -59,10 +92,16 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         picker.hide()
         if let target = searchTargetApp {
             searchTargetApp = nil
-            target.activate()
-            // Give the target app a beat to become key before typing into it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [settings] in
-                Inserter.replace(deleteCount: 0, with: text, method: settings.insertionMethod)
+            if target.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                // Searching from our own Settings window: there is no other app to type into.
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            } else {
+                // The search panel never activates Emojify, so the target app is still frontmost;
+                // give key focus a beat to return from the panel before typing.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [settings] in
+                    Inserter.replace(deleteCount: 0, with: text, method: settings.insertionMethod)
+                }
             }
         } else {
             input.commitFromMouse(text)
@@ -98,5 +137,13 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         guard let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) else { return nil }
         engine.recordUse(emoji)
         return engine.output(for: emoji)
+    }
+
+    func inputIsPointInPicker(_ point: CGPoint) -> Bool {
+        picker.contains(screenPoint: point)
+    }
+
+    func inputPickerIsVisible() -> Bool {
+        picker.isVisible && picker.selectedSuggestion != nil
     }
 }
