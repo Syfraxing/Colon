@@ -1,4 +1,5 @@
 import AppKit
+import ColonCore
 import SwiftUI
 
 /// Layout constants shared by the SwiftUI views and the AppKit hit-testing in the controller.
@@ -17,6 +18,16 @@ enum PickerMetrics {
     static let emptyHeight: CGFloat = 46
     /// Distance from the card's left edge to the left edge of the emoji glyph; the glyph sits under the trigger.
     static let glyphLeading: CGFloat = listInset + 10
+    /// "Recent" label above the list when the trigger alone shows the most-used emoji.
+    static let recentsHeaderHeight: CGFloat = 22
+
+    // Compact inline layout: one row of emoji with a caption underneath
+    static let compactCell: CGFloat = 36
+    static let compactGlyph: CGFloat = 24
+    static let compactCaptionHeight: CGFloat = 28
+    /// Wide enough for a long `:shortcode:` caption next to the Jev meter.
+    static let compactMinWidth: CGFloat = 236
+    static let compactGlyphLeading: CGFloat = listInset + (compactCell - compactGlyph) / 2
 
     // Search mode
     static let searchWidth: CGFloat = 420
@@ -27,9 +38,42 @@ enum PickerMetrics {
     static let gridCell: CGFloat = 42
     static let gridSpacing: CGFloat = 2
 
-    static func inlineCardHeight(rows: Int) -> CGFloat {
+    static func inlineCardHeight(rows: Int, recentsHeader: Bool = false) -> CGFloat {
         let body = rows == 0 ? emptyHeight : CGFloat(rows) * rowHeight
-        return listInset * 2 + body + footerHeight
+        return listInset * 2 + (recentsHeader ? recentsHeaderHeight : 0) + body + footerHeight
+    }
+
+    static func compactCardWidth(cells: Int) -> CGFloat {
+        max(compactMinWidth, listInset * 2 + CGFloat(cells) * compactCell)
+    }
+
+    static var compactCardHeight: CGFloat { listInset * 2 + compactCell + compactCaptionHeight }
+
+    /// The visible inline card for `count` suggestions.
+    static func inlineCardSize(layout: PickerLayout, count: Int, recentsHeader: Bool) -> CGSize {
+        switch layout {
+        case .list:
+            CGSize(width: inlineWidth, height: inlineCardHeight(rows: count, recentsHeader: recentsHeader))
+        case .compact:
+            CGSize(width: compactCardWidth(cells: count), height: compactCardHeight)
+        }
+    }
+
+    /// The largest card a capture can grow to; the panel is sized (and placed) for this once.
+    static func inlineMaxCardSize(layout: PickerLayout, maxResults: Int) -> CGSize {
+        inlineCardSize(layout: layout, count: maxResults, recentsHeader: true)
+    }
+
+    static func glyphLeading(for layout: PickerLayout) -> CGFloat {
+        layout == .list ? glyphLeading : compactGlyphLeading
+    }
+
+    /// Index of the compact cell under `x` (measured from the card's left edge), if any.
+    static func compactCellIndex(atX x: CGFloat, count: Int) -> Int? {
+        let offset = x - listInset
+        guard offset >= 0 else { return nil }
+        let index = Int(offset / compactCell)
+        return index < count ? index : nil
     }
 
     static func panelSize(card: CGSize) -> CGSize {

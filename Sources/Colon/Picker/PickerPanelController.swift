@@ -54,6 +54,10 @@ final class PickerPanelController {
         model.onPick = { [weak self] emoji in self?.onPick?(emoji) }
         model.onCancel = { [weak self] in self?.dismiss() }
         model.onSearchTextChange = { [weak self] text in self?.searchTextChanged(text) }
+        model.onSelectionChanged = { [weak self] in
+            guard let self, self.isOnScreen else { return }
+            Feedback.selectionChanged(self.settings)
+        }
         panel.onCancel = { [weak self] in self?.dismiss() }
 
         engine.objectWillChange
@@ -117,10 +121,16 @@ final class PickerPanelController {
             panel.allowsKey = false
         }
         model.maxRows = settings.maxResults
+        let layoutChanged = model.layout != settings.pickerLayout
+        if layoutChanged {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { model.layout = settings.pickerLayout }
+        }
         model.syncNow()
 
         if let caret {
-            if anchorCaret == nil || anchorIsFallback || needsReposition(for: caret) {
+            if anchorCaret == nil || anchorIsFallback || layoutChanged || needsReposition(for: caret) {
                 anchorCaret = caret
                 anchorIsFallback = false
                 positionInline(for: caret)
@@ -130,6 +140,8 @@ final class PickerPanelController {
             anchorCaret = fallback
             anchorIsFallback = true
             positionInline(for: fallback)
+        } else if layoutChanged, let anchorCaret {
+            positionInline(for: anchorCaret)
         }
         isActive = true
         updateInlinePresence()
@@ -176,6 +188,13 @@ final class PickerPanelController {
 
     func moveSelection(by delta: Int) {
         model.moveSelection(by: delta)
+    }
+
+    /// ⌘↩ inserted the highlighted emoji and the picker stays open: a short pop on that emoji
+    /// confirms it landed. No-op when nothing is highlighted.
+    func noteInserted() {
+        guard isOnScreen else { return }
+        model.noteInserted()
     }
 
     // MARK: Presentation
@@ -298,15 +317,14 @@ final class PickerPanelController {
     }
 
     private func positionInline(for caret: CGRect) {
-        let rows = settings.maxResults
-        let cardSize = CGSize(width: PickerMetrics.inlineWidth, height: PickerMetrics.inlineCardHeight(rows: rows))
+        let cardSize = PickerMetrics.inlineMaxCardSize(layout: model.layout, maxResults: settings.maxResults)
         let panelSize = PickerMetrics.panelSize(card: cardSize)
         let center = CGPoint(x: caret.midX, y: caret.midY)
         let visible = (Self.screen(containing: center)?.visibleFrame) ?? CGRect(origin: .zero, size: cardSize)
         let inset = PickerMetrics.screenInset
         let gap = PickerMetrics.caretGap
 
-        var cardX = caret.minX - PickerMetrics.glyphLeading
+        var cardX = caret.minX - PickerMetrics.glyphLeading(for: model.layout)
         cardX = min(max(cardX, visible.minX + inset), visible.maxX - inset - cardSize.width)
 
         let roomBelow = caret.minY - gap - visible.minY
@@ -348,19 +366,28 @@ final class PickerPanelController {
         case .search:
             return CGRect(x: margin, y: margin, width: size.width - margin * 2, height: size.height - margin * 2)
         case .inline:
-            let height = model.inlineCardHeight
-            let y = model.placement == .below ? size.height - margin - height : margin
-            return CGRect(x: margin, y: y, width: PickerMetrics.inlineWidth, height: height)
+            let card = model.inlineCardSize
+            let y = model.placement == .below ? size.height - margin - card.height : margin
+            return CGRect(x: margin, y: y, width: card.width, height: card.height)
         }
     }
 
+    /// The row (list) or cell (compact) under `windowPoint`, if any.
     private func rowIndex(at windowPoint: NSPoint) -> Int? {
         let card = cardRectInWindow
         guard card.contains(windowPoint), !model.suggestions.isEmpty else { return nil }
-        let offset = card.maxY - PickerMetrics.listInset - windowPoint.y
-        guard offset >= 0 else { return nil }
-        let index = Int(offset / PickerMetrics.rowHeight)
-        return model.suggestions.indices.contains(index) ? index : nil
+        switch model.layout {
+        case .list:
+            let header = model.showsRecentsHeader ? PickerMetrics.recentsHeaderHeight : 0
+            let offset = card.maxY - PickerMetrics.listInset - header - windowPoint.y
+            guard offset >= 0 else { return nil }
+            let index = Int(offset / PickerMetrics.rowHeight)
+            return model.suggestions.indices.contains(index) ? index : nil
+        case .compact:
+            let fromTop = card.maxY - windowPoint.y
+            guard fromTop <= PickerMetrics.listInset + PickerMetrics.compactCell else { return nil }
+            return PickerMetrics.compactCellIndex(atX: windowPoint.x - card.minX, count: model.suggestions.count)
+        }
     }
 
     // MARK: Click-away

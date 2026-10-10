@@ -10,6 +10,12 @@ struct PickerSnapshot {
     var jevStatus: JevStatus
 }
 
+/// The emoji just inserted with ⌘↩ while the picker stays open; `serial` makes repeats fire.
+struct InsertPulse: Equatable {
+    let id: String
+    let serial: Int
+}
+
 /// A keyboard-driven request to bring a row or cell into view; `serial` makes repeats fire.
 struct ScrollRequest: Equatable {
     let id: String
@@ -24,6 +30,8 @@ final class PickerModel: ObservableObject {
     enum Placement { case below, above }
 
     @Published var mode: Mode = .inline
+    /// Inline layout (search mode ignores it).
+    @Published var layout: PickerLayout = .list
     @Published var placement: Placement = .below
     /// Drives the appear/disappear scale + travel.
     @Published var isPresented = false
@@ -33,6 +41,9 @@ final class PickerModel: ObservableObject {
     @Published private(set) var isRefining = false
     @Published private(set) var jevStatus: JevStatus = .idle
     @Published private(set) var selectedIndex = 0
+    @Published private(set) var insertPulse: InsertPulse?
+    /// The user moved the highlight with the keyboard for the current query.
+    @Published private(set) var keyboardMovedHighlight = false
 
     // Search mode
     @Published private(set) var searchText = ""
@@ -52,6 +63,8 @@ final class PickerModel: ObservableObject {
     var onSearchTextChange: ((String) -> Void)?
     /// After every engine sync, so the controller can hide on an empty list.
     var onSynced: (() -> Void)?
+    /// The highlight moved by keyboard or hover (haptics).
+    var onSelectionChanged: (() -> Void)?
 
     weak var searchField: NSTextField?
 
@@ -80,7 +93,18 @@ final class PickerModel: ObservableObject {
     /// The emoji Return would insert right now.
     var currentEmoji: Emoji? { isGridVisible ? selectedGridEmoji : selectedSuggestion?.emoji }
 
-    var inlineCardHeight: CGFloat { PickerMetrics.inlineCardHeight(rows: suggestions.count) }
+    /// The trigger alone: the list holds the user's most-used emoji rather than matches.
+    var isRecents: Bool { mode == .inline && query.isEmpty && !suggestions.isEmpty }
+
+    /// Recents before the user arrows into them: Return/Tab/Esc still reach the app, so the
+    /// highlight is drawn as a hint rather than a promise.
+    var isSelectionTentative: Bool { isRecents && !keyboardMovedHighlight }
+
+    var showsRecentsHeader: Bool { isRecents && layout == .list }
+
+    var inlineCardSize: CGSize {
+        PickerMetrics.inlineCardSize(layout: layout, count: suggestions.count, recentsHeader: showsRecentsHeader)
+    }
 
     // MARK: Engine mirroring
 
@@ -112,6 +136,7 @@ final class PickerModel: ObservableObject {
 
         if queryChanged {
             userMovedHighlight = false
+            if keyboardMovedHighlight { keyboardMovedHighlight = false }
         } else if userMovedHighlight {
             incoming = Self.preservingOrder(of: suggestions, updatedWith: incoming)
         }
@@ -169,6 +194,8 @@ final class PickerModel: ObservableObject {
         let count = suggestions.count
         let next = ((selectedIndex + delta) % count + count) % count
         userMovedHighlight = true
+        if !keyboardMovedHighlight { keyboardMovedHighlight = true }
+        if next != selectedIndex { onSelectionChanged?() }
         setSelection(next)
         if mode == .search { requestScroll("row/\(suggestions[next].id)") }
     }
@@ -178,7 +205,16 @@ final class PickerModel: ObservableObject {
     func selectRow(_ index: Int) {
         guard suggestions.indices.contains(index) else { return }
         userMovedHighlight = true
-        if index != selectedIndex { setSelection(index) }
+        guard index != selectedIndex else { return }
+        onSelectionChanged?()
+        setSelection(index)
+    }
+
+    /// ⌘↩ inserted the highlighted emoji and the picker stays open: pulse it.
+    func noteInserted() {
+        syncIfNeeded()
+        guard let id = selectedSuggestion?.id else { return }
+        insertPulse = InsertPulse(id: id, serial: (insertPulse?.serial ?? 0) + 1)
     }
 
     private func setSelection(_ index: Int) {
@@ -193,12 +229,15 @@ final class PickerModel: ObservableObject {
         let counts = sections.map(\.emoji.count)
         let next = GridNavigator.move(gridSelection, dx: dx, dy: dy, counts: counts, columns: PickerMetrics.gridColumns)
         guard next != gridSelection else { return }
+        onSelectionChanged?()
         gridSelection = next
         requestScroll(sections[next.section].cellID(next.item))
     }
 
     func hoverGrid(_ position: GridPosition) {
-        if gridSelection != position { gridSelection = position }
+        guard gridSelection != position else { return }
+        onSelectionChanged?()
+        gridSelection = position
     }
 
     func jump(toSection index: Int) {
