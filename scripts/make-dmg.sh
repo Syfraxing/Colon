@@ -93,7 +93,10 @@ hdiutil convert -quiet "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG"
 
 if [[ -n "${SIGN_IDENTITY:-}" && "$SIGN_IDENTITY" != "-" ]]; then
     log "Signing DMG"
-    codesign --force --sign "$SIGN_IDENTITY" "$DMG"
+    DMG_SIGN_FLAGS=(--force --sign "$SIGN_IDENTITY")
+    # Notarization requires a secure timestamp on Developer ID signatures.
+    [[ "$SIGN_IDENTITY" == "Developer ID Application"* ]] && DMG_SIGN_FLAGS+=(--timestamp)
+    codesign "${DMG_SIGN_FLAGS[@]}" "$DMG"
 fi
 
 hdiutil verify -quiet "$DMG"

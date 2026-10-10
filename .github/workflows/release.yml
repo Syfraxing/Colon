@@ -27,18 +27,22 @@ jobs:
     name: Build & publish
     runs-on: macos-latest
     timeout-minutes: 45
-    # Holds COLON_SIGNING_P12, COLON_SIGNING_P12_PASSWORD and SPARKLE_ED_PRIVATE_KEY,
-    # deployable from v* tags only.
+    # Holds COLON_SIGNING_P12, COLON_SIGNING_P12_PASSWORD (the Developer ID Application
+    # certificate), NOTARY_API_KEY, NOTARY_KEY_ID, NOTARY_ISSUER_ID (App Store Connect API
+    # key, Developer role) and SPARKLE_ED_PRIVATE_KEY, deployable from v* tags only.
     environment: release
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
       BUILD: ${{ github.run_number }}
       REPO_URL: https://github.com/${{ github.repository }}
       FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
-      # SHA-1 of the self-signed "Colon Release Signing" certificate, and the designated
-      # requirement it must produce. Changing either breaks updates and privacy grants.
-      SIGN_IDENTITY: 3956D23DC611E57F528784A3527EC37C960F9B92
-      PINNED_REQUIREMENT: identifier "so.slayer.Colon" and certificate root = H"3956d23dc611e57f528784a3527ec37c960f9b92"
+      # The Developer ID identity, given by name so build-app.sh adds the secure timestamp
+      # notarization needs, and the designated requirement it must produce. The requirement
+      # names the team, not the certificate, so renewing the certificate keeps updates and
+      # privacy grants working; changing team or bundle ID breaks both.
+      SIGN_IDENTITY: 'Developer ID Application: Hunter Nathaniel Claycomb (MD396T2MTR)'
+      TEAM_ID: MD396T2MTR
+      PINNED_REQUIREMENT: identifier "so.slayer.Colon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = MD396T2MTR
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,8 +120,7 @@ jobs:
           rm -f "$P12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          # Self-signed, so find-identity reports CSSMERR_TP_NOT_TRUSTED; codesign still signs.
-          security find-identity -p codesigning "$KEYCHAIN" | grep -q "$SIGN_IDENTITY" \
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -qF "\"$SIGN_IDENTITY\"" \
             || { echo "::error::signing identity $SIGN_IDENTITY not in the imported certificate"; exit 1; }
 
       - name: Build Colon.app (universal, release-signed)
@@ -135,7 +138,10 @@ jobs:
           REQUIREMENT="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
           [[ "$REQUIREMENT" == "$PINNED_REQUIREMENT" ]] \
             || { echo "::error::designated requirement is '$REQUIREMENT'"; exit 1; }
-          codesign -dv "$APP" 2>&1 | grep -q 'flags=.*runtime' || { echo "::error::app lacks the hardened runtime"; exit 1; }
+          INFO="$(codesign -dv "$APP" 2>&1)"
+          grep -q 'flags=.*runtime' <<<"$INFO" || { echo "::error::app lacks the hardened runtime"; exit 1; }
+          grep -qx "TeamIdentifier=$TEAM_ID" <<<"$INFO" || { echo "::error::app is not signed by team $TEAM_ID"; exit 1; }
+          grep -q '^Timestamp=' <<<"$INFO" || { echo "::error::app signature has no secure timestamp"; exit 1; }
           ARCHS="$(lipo -archs "$APP/Contents/MacOS/Colon")"
           [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]] \
             || { echo "::error::not universal: $ARCHS"; exit 1; }
@@ -144,11 +150,36 @@ jobs:
           [[ "$KEY" != SPARKLE_PUBLIC_KEY_PLACEHOLDER ]] || { echo "::error::SUPublicEDKey is the placeholder"; exit 1; }
           echo "$REQUIREMENT, $ARCHS"
 
+      - name: Write notarization key
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+        run: |
+          NOTARY_KEY_PATH="$RUNNER_TEMP/notary-key.p8"
+          (umask 077 && printf '%s\n' "$NOTARY_API_KEY" > "$NOTARY_KEY_PATH")
+          echo "NOTARY_KEY_PATH=$NOTARY_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Notarize and staple Colon.app
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          scripts/notarize.sh build/Colon.app
+          spctl --assess --type execute --verbose=2 build/Colon.app
+
+      # The zip (Sparkle's update archive) and the DMG both carry the stapled app.
       - name: Package zip and DMG
         run: |
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent build/Colon.app "dist/Colon-$VERSION.zip"
           scripts/make-dmg.sh
+
+      - name: Notarize and staple DMG
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          scripts/notarize.sh "dist/Colon-$VERSION.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "dist/Colon-$VERSION.dmg"
           cd dist && shasum -a 256 Colon-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Delete signing keychain
@@ -160,7 +191,7 @@ jobs:
             security list-keychains -d user -s ~/Library/Keychains/login.keychain-db
           fi
           if [[ -n "${KEYCHAIN:-}" && -f "$KEYCHAIN" ]]; then security delete-keychain "$KEYCHAIN"; fi
-          rm -f "$RUNNER_TEMP/colon-signing.p12"
+          rm -f "$RUNNER_TEMP/colon-signing.p12" "$RUNNER_TEMP/notary-key.p8"
 
       - name: Generate appcast
         if: env.PUBLISH_FEED == 'true'

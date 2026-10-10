@@ -26,7 +26,7 @@
 #
 # Why the signature matters: macOS ties the Accessibility permission (TCC) to the
 # app's code signature. A certificate-backed signature (Developer ID, Apple
-# Development, or a self-signed certificate such as "Colon Release Signing") has a
+# Development, or a self-signed certificate such as "Colon Dev") has a
 # stable designated requirement, so the permission survives rebuilds and updates.
 # An ad-hoc signature changes with every build, so after each rebuild you must remove
 # Colon from System Settings > Privacy & Security > Accessibility and grant it again.

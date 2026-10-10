@@ -70,19 +70,10 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 
 1. Download `Colon-<version>.dmg` (or the `.zip`) from the
    [latest release](https://github.com/Syfraxing/Colon/releases/latest).
-2. Open it and drag **Colon** into **Applications**.
-3. **First launch.** Release builds are not notarized by Apple yet, so Gatekeeper refuses
-   to open the app the first time. Pick one:
-   - **macOS 15 Sequoia and later:** open Colon, click **Done** on the warning, then go to
-     **System Settings → Privacy & Security**, scroll down to *"Colon" was blocked* and
-     click **Open Anyway**.
-   - **macOS 14 Sonoma:** right-click (or Control-click) Colon in Applications, choose
-     **Open**, then **Open** again.
-   - **Any version:** remove the quarantine flag in Terminal:
-     ```sh
-     xattr -dr com.apple.quarantine /Applications/Colon.app
-     ```
-4. **Grant Accessibility (and Input Monitoring if asked).** Colon needs them to see your
+2. Open it and drag **Colon** into **Applications**, then open Colon. Releases from 0.5.0
+   on are signed with Developer ID and notarized by Apple, so macOS opens them without a
+   Gatekeeper warning.
+3. **Grant Accessibility (and Input Monitoring if asked).** Colon needs them to see your
    keystrokes and type the emoji. The onboarding window takes you to **System Settings →
    Privacy & Security → Accessibility** (and **Input Monitoring** on macOS versions that
    require it); switch Colon on and it starts working immediately. Install the app in
@@ -99,10 +90,15 @@ Settings → About checks right away. Updates come from this repository's GitHub
 over HTTPS and are installed only if both the feed and the download carry Colon's EdDSA
 release signature.
 
-**Coming from 0.2.x?** Install 0.3.0 manually one last time (download it and replace the
-app in Applications, as above). 0.3.0 switches from ad-hoc signing to a stable release
-certificate, so macOS asks for the permissions once more. Reset the old grants, then
-allow Colon again when onboarding asks:
+**Coming from 0.3.x or 0.4.x?** 0.5.0 moves from Colon's self-signed certificate to an
+Apple Developer ID. Check for Updates installs it as usual, but macOS treats the new
+signature as a new app, so grant the permissions once more: run the two `tccutil` commands
+below, then allow Colon again when onboarding asks. Later updates keep the permissions.
+
+**Coming from 0.2.x?** 0.2.x can't update itself, so install the latest release manually
+(download it and replace the app in Applications, as above). It is signed differently
+from 0.2.x, so macOS asks for the permissions once more. Reset the old grants, then allow
+Colon again when onboarding asks:
 ```sh
 tccutil reset Accessibility so.slayer.Colon
 tccutil reset ListenEvent so.slayer.Colon
