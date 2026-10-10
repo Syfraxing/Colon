@@ -50,6 +50,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         settingsWindow.onAPIKeyChanged = { [weak self] in self?.engine.reloadAPIKey() }
         KeyboardShortcuts.onKeyUp(for: .openPicker) { [weak self] in self?.toggleSearch() }
 
+        startGIFSearch()
         input.start()
         settingsWindow.showOnboardingIfNeeded()
         updater.start()
@@ -177,5 +178,25 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     func openGIFSearch(context: PredictionContext, pendingText: String) {
         gifPicker?.show(context: context, pendingText: pendingText)
+    }
+
+    // MARK: v0.4 gif
+
+    /// Creates the GIF panel; the input layer opens it via `gifPicker.show(context:pendingText:)`.
+    private func startGIFSearch() {
+        let controller = GIFPickerController(settings: settings)
+        controller.onOpenSettings = { [weak self] in self?.settingsWindow.show(tab: .gifs) }
+        controller.onWillShow = { [weak self] in
+            guard let self else { return }
+            self.input.cancelTracking()
+            self.picker.hide()
+            self.engine.reset()
+            self.searchTargetApp = nil
+        }
+        controller.onInserted = { [weak self] in
+            guard let self else { return }
+            Feedback.inserted(self.settings)
+        }
+        gifPicker = controller
     }
 }

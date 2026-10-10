@@ -127,6 +127,27 @@ The key is stored in your macOS **Keychain** and is only ever sent to
 else. Debug builds (`swift run`) also accept a `JEV_API_KEY` environment variable for
 development; release builds read the Keychain only.
 
+## GIFs (bring your own GIPHY key)
+
+Type `:gif` and a space in any text field. A glass GIF search opens with the field
+focused: type what you feel, move with the arrow keys, press **Enter** (or click) and the
+GIF is pasted where you were typing. **Esc** closes it. Your clipboard comes back a moment
+later.
+
+<img src="docs/screenshots/gif-dark.png" alt="The Colon GIF search showing celebration GIFs, reranked by Jev" width="560">
+
+1. Create a free key on the [GIPHY developer dashboard](https://developers.giphy.com/dashboard/)
+   (create an app, choose **API**, copy the key). Free beta keys allow 100 requests an hour.
+2. Click the menu bar icon → **Settings… → GIFs**, paste the key and press **Test**. The
+   same tab sets the content rating (PG-13 by default) and turns `:gif` off.
+
+GIF search uses GIPHY (Google shut down the Tenor API in 2026).
+Your search terms go to `api.giphy.com` with your key; with a Jev key, the terms and the
+GIF titles also go to Jev to put the best match first. Colon never saves your searches:
+results live in memory while the panel is open. A GIF you insert is kept in
+`~/Library/Caches/so.slayer.Colon/GIFs` for a day so apps can read it, then removed.
+Without a key, the panel explains how to get one and makes no network requests.
+
 ## Privacy
 
 Colon needs Accessibility access, which is powerful, so here is exactly what it does
