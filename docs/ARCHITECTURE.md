@@ -75,3 +75,26 @@ SuggestionEngine: local EmojiSearch (sync, <1 ms) → publish → debounce ~60 m
 
 ## Secrets
 - The Jev key lives only in the Keychain (`KeychainStore`), or `JEV_API_KEY` env for development/tests. Never log it, never commit it, never write it to UserDefaults.
+
+## Integration contract (binding; supersedes anything above)
+
+Coordinator-owned additions already on main: `AppSettings.isValidTrigger(_:)` (1–3 ASCII punctuation/symbol chars, none of `[A-Za-z0-9_+-]`), expanded `defaultExcludedBundleIDs` (terminals, IDEs, password managers), `InputStatus` enum, `KeychainStore` with `SecItemUpdate` and DEBUG-only `JEV_API_KEY` override.
+
+Show / hide / commit:
+1. `picker.hide()` (programmatic) NEVER fires `onDismiss`. `onDismiss` fires only for dismissals the panel starts itself (click outside, Space change, Esc in search mode). `hide`, `engine.reset`, `input.cancelTracking` are idempotent; `cancelTracking` never calls `delegate.inputHide`.
+2. Mouse picks: the tap must not turn a mouseDown inside the picker into `.interrupt`. `InputControllerDelegate` gains `func inputIsPointInPicker(_ point: CGPoint) -> Bool` (point in Cocoa screen coords; input flips the CG top-left location). Picker exposes `func contains(screenPoint: CGPoint) -> Bool`.
+3. `TriggerEngine.handle(_ input: KeyInput, pickerVisible: Bool) -> TriggerResult`. The coordinator reports visible = `picker.isVisible && picker.selectedSuggestion != nil`. When not visible, Enter/Tab/↑/↓/Esc pass through (not swallowed). The picker hides itself (no panel) when the list is empty.
+4. If a commit delegate call returns nil, InputController re-posts the swallowed key (marked with `eventSourceUserData`).
+5. `inputShow` is called on every query change; repeat `picker.show(near:)` = update/resize only (no re-animation, anchored). The anchor rect is computed once per capture (trigger char) by InputController; the first `inputShow` may pass a cached/nil anchor and a follow-up `inputShow` with the same query passes the AX anchor + context.
+6. `SuggestionEngine.update` with the same query and only a new context skips local recompute and just reschedules Jev.
+7. Picker tracks selection by `Suggestion.id`; `selectedSuggestion` returns the highlighted one. After ↑/↓ the order freezes for that query.
+8. Esc → hide + stop tracking. ←/→ → hide + reset. Backspace below minQueryLength → hide but keep tracking. Backspace past trigger → reset with boundary restored. IME (non keyboard-layout input source) → silent.
+9. Threading: tap source on the main run loop, `.commonModes`, `MainActor.assumeIsolated`. Banned in the callback: AX IPC, Keychain, first `EmojiStore` load, window creation. Coordinator preloads `EmojiStore.shared` at launch.
+10. `SuggestionEngine.reloadAPIKey()` reads the key off-main once (launch + after Settings saves). The engine never touches the Keychain per query. Jev only when `query.count >= 2`; never `text_before` unless opted in. `URLSessionConfiguration.ephemeral`. Never surface server error bodies verbatim.
+11. Skin tones: never naively append; insert the modifier after the first scalar and drop VS16 (U+FE0F) when present; ZWJ sequences only if the dataset says the tone applies. Tests with 👋, ☝️, 🧑‍💻.
+12. Search mode: panel stays `.nonactivatingPanel`, `canBecomeKey` only in search mode, `makeKeyAndOrderFront`, no `NSApp.activate`; target app stays frontmost. Input silence rule: `NSApp.isActive || NSApp.keyWindow != nil` (covers Settings + search panel). Hotkey while search open toggles it closed.
+13. `InputController` is an `ObservableObject` with `@Published private(set) var status: InputStatus`; it polls `AXIsProcessTrusted` + `CGEvent.tapIsEnabled` every ~2 s and starts itself when permission appears (`start()` idempotent). `isEnabled == false` tears the tap down.
+14. `StatusItemController` gains `var onOpenPicker: (() -> Void)?` and `func update(inputStatus: InputStatus)`; it shows "Paused — secure input", "Accessibility permission needed" (click opens onboarding via `onOpenSettings`), etc. Settings calls `engine.reloadAPIKey()` after saving a key: `SettingsWindowController.init(settings:engine:)`.
+15. Onboarding probes with `AXIsProcessTrusted()` (and `IOHIDCheckAccess` for Input Monitoring), never with `tapCreate`.
+16. Menu-bar icon: SF Symbol or drawn in code (executable target has no resources). App icon file: `Resources/AppIcon.icns`.
+17. No `print`/`NSLog`/`debugPrint` of keys, queries, or headers in Input/Jev code. `os.Logger` with `.private` interpolation only.

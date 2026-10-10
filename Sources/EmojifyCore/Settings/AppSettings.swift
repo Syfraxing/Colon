@@ -29,15 +29,44 @@ public final class AppSettings: ObservableObject {
         public static let hasCompletedOnboarding = "hasCompletedOnboarding"
     }
 
-    /// Apps that ship their own `:shortcode:` picker; excluded on first launch.
+    /// Excluded on first launch: apps with their own `:shortcode:` picker, plus terminals, IDEs and
+    /// password managers (a `:` typed into a password prompt must never become a query).
     public static let defaultExcludedBundleIDs: [String] = [
-        "com.tinyspeck.slackmacgap", // Slack
-        "com.hnc.Discord",           // Discord
-        "com.microsoft.teams2",      // Microsoft Teams
-        "com.linear",                // Linear
-        "notion.id",                 // Notion
-        "com.github.GitHubClient",   // GitHub Desktop
+        // Native emoji pickers
+        "com.tinyspeck.slackmacgap",       // Slack
+        "com.hnc.Discord",                 // Discord
+        "com.microsoft.teams2",            // Microsoft Teams
+        "com.linear",                      // Linear
+        "notion.id",                       // Notion
+        "com.github.GitHubClient",         // GitHub Desktop
+        // Terminals and editors
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable",
+        "com.microsoft.VSCode",
+        "com.apple.dt.Xcode",
+        "dev.zed.Zed",
+        "com.todesktop.230313mzl4w4u92",   // Cursor
+        // Password managers
+        "com.1password.1password",
+        "com.bitwarden.desktop",
+        "com.apple.keychainaccess",
+        "com.apple.Passwords",
     ]
+
+    /// Characters a trigger may not contain: they are query characters or whitespace.
+    private static let forbiddenTriggerCharacters = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "_+-"))
+        .union(.whitespacesAndNewlines)
+
+    /// A trigger is 1–3 ASCII punctuation/symbol characters that are not query characters.
+    /// Shared by the Settings UI (validation) and the input layer (deleteCount math relies on it).
+    public static func isValidTrigger(_ trigger: String) -> Bool {
+        (1...3).contains(trigger.count) && trigger.unicodeScalars.allSatisfy {
+            $0.isASCII && !forbiddenTriggerCharacters.contains($0)
+        }
+    }
 
     private let defaults: UserDefaults
 
@@ -77,8 +106,8 @@ public final class AppSettings: ObservableObject {
         ])
         isEnabled = defaults.bool(forKey: Key.isEnabled)
         let trigger = defaults.string(forKey: Key.triggerString) ?? ":"
-        triggerString = trigger.isEmpty ? ":" : trigger
-        minQueryLength = max(0, defaults.integer(forKey: Key.minQueryLength))
+        triggerString = Self.isValidTrigger(trigger) ? trigger : ":"
+        minQueryLength = min(max(1, defaults.integer(forKey: Key.minQueryLength)), 5)
         maxResults = min(max(defaults.integer(forKey: Key.maxResults), 3), 12)
         useJev = defaults.bool(forKey: Key.useJev)
         sendTextContext = defaults.bool(forKey: Key.sendTextContext)
@@ -93,4 +122,15 @@ public final class AppSettings: ObservableObject {
         guard let bundleID else { return false }
         return excludedBundleIDs.contains(bundleID)
     }
+}
+
+/// Health of the keyboard pipeline, shown in the menu bar.
+public enum InputStatus: Equatable, Sendable {
+    case running
+    /// Accessibility (or Input Monitoring) permission not granted.
+    case noPermission
+    /// Secure keyboard entry is active (password field, terminal secure mode).
+    case secureInput
+    /// User turned Emojify off.
+    case disabled
 }
