@@ -72,6 +72,10 @@ public struct TriggerEngine: Sendable {
     public var horizontalLayout: Bool
     /// `<trigger>gif` + space opens GIF search.
     public var gifSearchEnabled: Bool
+    /// The input layer confirmed that this capture types into a readable, non-secure text element
+    /// (a usable focus probe). GIF search fires only then; otherwise the space is ordinary typing.
+    /// The input layer sets it before every `handle`.
+    public var textTargetConfirmed = false
 
     /// Whether the picker is currently shown (input layer reports back what the UI did).
     public private(set) var isShowing = false
@@ -81,8 +85,11 @@ public struct TriggerEngine: Sendable {
     /// True after a ⌘↩ insert while the picker stays open; the `:query` has been replaced, so
     /// nothing typed is pending in the app.
     public private(set) var isMultiInserting = false
-    /// The user moved the highlight for the current query (arrow keys).
+    /// The user moved the highlight for the current query (arrow keys). On the bare-trigger strip
+    /// this is the "engaged" bit: only ↓ (list) or → (compact) sets it.
     public private(set) var selectionMoved = false
+    /// The ⌘↩ that started multi-insert has not been confirmed by the UI yet.
+    private var keepOpenUnconfirmed = false
 
     /// True when the character before the caret is a word boundary (or unknown, e.g. after a
     /// focus change), i.e. a trigger typed now would start a query.
@@ -124,6 +131,7 @@ public struct TriggerEngine: Sendable {
     ///   (↑ ↓ Enter Tab Esc) are swallowed only when this is true and the engine is showing;
     ///   otherwise they pass through to the app.
     public mutating func handle(_ input: KeyInput, pickerVisible: Bool) -> TriggerResult {
+        keepOpenUnconfirmed = false
         if isMultiInserting {
             return handleMultiInsert(input, pickerVisible: pickerVisible)
         }
@@ -151,18 +159,9 @@ public struct TriggerEngine: Sendable {
             backspace()
             return visibilityResult(wasShowing: wasShowing)
 
-        case .up, .down:
-            if ownsPickerKeys {
-                selectionMoved = true
-                return TriggerResult(.moveSelection(input == .down ? 1 : -1), swallow: true)
-            }
-            caretMoved()
-            return visibilityResult(wasShowing: wasShowing)
-
-        case .left, .right:
-            if ownsPickerKeys && horizontalLayout {
-                selectionMoved = true
-                return TriggerResult(.moveSelection(input == .right ? 1 : -1), swallow: true)
+        case .up, .down, .left, .right:
+            if ownsPickerKeys, let move = arrowMove(input) {
+                return TriggerResult(.moveSelection(move), swallow: true)
             }
             caretMoved()
             return visibilityResult(wasShowing: wasShowing)
@@ -180,6 +179,7 @@ public struct TriggerEngine: Sendable {
             if ownsCommitKeys, let query {
                 let count = trigger.count + query.count
                 isMultiInserting = true
+                keepOpenUnconfirmed = true
                 closingProgress = 0
                 triggerProgress = 0
                 return TriggerResult(.commitSelectionKeepOpen(deleteCount: count), swallow: true)
@@ -204,6 +204,29 @@ public struct TriggerEngine: Sendable {
         }
     }
 
+    /// The selection delta for an arrow the picker owns, nil when the arrow belongs to the app.
+    /// ↑/↓ always move; ←/→ only in the compact layout. An unengaged bare-trigger strip is engaged
+    /// only by ↓ (list) or → (compact), which highlights the first item (delta 0).
+    private mutating func arrowMove(_ input: KeyInput) -> Int? {
+        let vertical = input == .up || input == .down
+        guard vertical || horizontalLayout else { return nil }
+        if query?.isEmpty == true, !selectionMoved {
+            guard input == (horizontalLayout ? .right : .down) else { return nil }
+            selectionMoved = true
+            return 0
+        }
+        selectionMoved = true
+        return input == .down || input == .right ? 1 : -1
+    }
+
+    /// The UI could not insert for the ⌘↩ that started multi-insert (no selection): nothing was
+    /// deleted, so the capture goes on as if the key never happened.
+    public mutating func keepOpenInsertFailed() {
+        guard keepOpenUnconfirmed else { return }
+        keepOpenUnconfirmed = false
+        isMultiInserting = false
+    }
+
     /// After a ⌘↩ the picker stays open with nothing pending in the app: ⌘↩ inserts again, Enter/Tab
     /// insert one more and close, Esc closes, the selection keys still move, and any other key closes
     /// the picker and is handled as ordinary typing right after an emoji (a word boundary).
@@ -218,10 +241,10 @@ public struct TriggerEngine: Sendable {
             case .escape:
                 endTracking(boundary: true)
                 return TriggerResult(.hide, swallow: true)
-            case .up, .down:
-                return TriggerResult(.moveSelection(input == .down ? 1 : -1), swallow: true)
-            case .left where horizontalLayout, .right where horizontalLayout:
-                return TriggerResult(.moveSelection(input == .right ? 1 : -1), swallow: true)
+            case .up, .down, .left, .right:
+                if let move = arrowMove(input) {
+                    return TriggerResult(.moveSelection(move), swallow: true)
+                }
             default:
                 break
             }
@@ -238,6 +261,7 @@ public struct TriggerEngine: Sendable {
         isShowing = false
         query = nil
         isMultiInserting = false
+        keepOpenUnconfirmed = false
         selectionMoved = false
         triggerProgress = 0
         closingProgress = 0
@@ -253,6 +277,11 @@ public struct TriggerEngine: Sendable {
         if let current = query {
             if closingProgress > 0 || (autoReplaceOnClosingTrigger && !current.isEmpty && character == triggerChars[0]) {
                 return typeClosing(character, query: current, triggerChars: triggerChars, isOnlyCharacter: isOnlyCharacter)
+            }
+            if Self.isEmoticon(current, next: character) {
+                // `:-)`, `:-P`, `:+D`: a face, not a shortcode (`:-1`, `:+1` go on).
+                endTracking(boundary: isBoundary(character))
+                return nil
             }
             if Self.isQueryCharacter(character), current.count < Self.maxQueryLength {
                 query = current + String(character)
@@ -374,7 +403,7 @@ public struct TriggerEngine: Sendable {
     /// `<trigger>gif` followed by a typed space opens GIF search. The space is swallowed, so only
     /// trigger + keyword reached the app. `:gifs` and `:gif:` stay ordinary.
     private mutating func gifTrigger(_ character: Character) -> TriggerResult? {
-        guard gifSearchEnabled, character == " ", closingProgress == 0,
+        guard gifSearchEnabled, textTargetConfirmed, character == " ", closingProgress == 0,
               let query, query.lowercased() == Self.gifKeyword else { return nil }
         let deleteCount = trigger.count + query.count
         endTracking(boundary: true)
@@ -386,6 +415,12 @@ public struct TriggerEngine: Sendable {
     /// Letters, digits, `_`, `+`, `-`.
     public static func isQueryCharacter(_ character: Character) -> Bool {
         character.isLetter || character.isNumber || character == "_" || character == "+" || character == "-"
+    }
+
+    /// A query that starts with `-`/`+` continues only with a digit (`-1`, `+1`, `+100`); anything
+    /// else after a leading nose is an emoticon such as `:-P` or `:-D`.
+    static func isEmoticon(_ query: String, next character: Character) -> Bool {
+        (query == "-" || query == "+") && !character.isNumber
     }
 
     /// Whitespace and punctuation (other than query and trigger characters) are word boundaries.

@@ -68,6 +68,8 @@ final class PracticeController: ObservableObject {
             let suggestions = visibleSuggestions
             if suggestions.indices.contains(selectedIndex) {
                 insert(engine.output(for: suggestions[selectedIndex].emoji), replacing: deleteCount, in: textView)
+            } else {
+                trigger.keepOpenInsertFailed()
             }
         case .openGIFSearch:
             // Unreachable: GIF search is turned off for the practice engine above.
@@ -306,6 +308,9 @@ final class PracticeNSTextView: NSTextView {
         if flags.contains(.command) || flags.contains(.control) { return .interrupt }
         switch event.keyCode {
         case 51: return .backspace
+        case 123...126 where flags.contains(.shift) || flags.contains(.option):
+            // Text selection and word jumps stay native.
+            return .interrupt
         case 126: return .up
         case 125: return .down
         case 123: return .left

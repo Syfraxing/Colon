@@ -498,14 +498,16 @@ final class TriggerEngineTests: XCTestCase {
 }
 
 final class TriggerEngineV04Tests: XCTestCase {
-    private let shortcodes: Set<String> = ["joy", "smile", "gift"]
+    private let shortcodes: Set<String> = ["joy", "smile", "gift", "-1", "+1"]
 
     private func makeEngine(trigger: String = ":", minQueryLength: Int = 2, recents: Bool = true,
-                            horizontal: Bool = false, gif: Bool = true) -> TriggerEngine {
+                            horizontal: Bool = false, gif: Bool = true, textTarget: Bool = true) -> TriggerEngine {
         let known = shortcodes
-        return TriggerEngine(trigger: trigger, minQueryLength: minQueryLength, autoReplaceOnClosingTrigger: true,
-                             showsRecentsOnTrigger: recents, horizontalLayout: horizontal, gifSearchEnabled: gif,
-                             shortcodeExists: { known.contains($0) })
+        var engine = TriggerEngine(trigger: trigger, minQueryLength: minQueryLength, autoReplaceOnClosingTrigger: true,
+                                   showsRecentsOnTrigger: recents, horizontalLayout: horizontal, gifSearchEnabled: gif,
+                                   shortcodeExists: { known.contains($0) })
+        engine.textTargetConfirmed = textTarget
+        return engine
     }
 
     @discardableResult
@@ -602,8 +604,11 @@ final class TriggerEngineV04Tests: XCTestCase {
     func testArrowThenEnterInsertsRecent() {
         var engine = makeEngine()
         type(":", into: &engine)
-        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        // The first ↓ engages the strip on its first item; the next one moves.
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(0), swallow: true))
         XCTAssertTrue(engine.selectionMoved)
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.up), TriggerResult(.moveSelection(-1), swallow: true))
         XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
         XCTAssertNil(engine.query)
     }
@@ -611,7 +616,7 @@ final class TriggerEngineV04Tests: XCTestCase {
     func testArrowThenTabEscAndCommandEnterBelongToPicker() {
         var engine = makeEngine()
         type(":", into: &engine)
-        _ = engine.feed(.up)
+        _ = engine.feed(.down)
         XCTAssertEqual(engine.feed(.tab), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
 
         engine = makeEngine()
@@ -825,6 +830,7 @@ final class TriggerEngineV04Tests: XCTestCase {
     func testCompactArrowOnBareTriggerEngagesPicker() {
         var engine = makeEngine(horizontal: true)
         type("a :", into: &engine)
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(0), swallow: true))
         XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(1), swallow: true))
         XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
     }
@@ -916,6 +922,137 @@ final class TriggerEngineV04Tests: XCTestCase {
         type(":gift", into: &engine)
         _ = engine.feed(.backspace)
         XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+    }
+
+    func testGifWithoutUsableFocusPassesSpaceAndDeletesNothing() {
+        var engine = makeEngine(textTarget: false)
+        type(":gif", into: &engine)
+        let result = engine.feed(.text(" "))
+        XCTAssertEqual(result, TriggerResult(.hide))
+        XCTAssertFalse(result.swallow)
+        XCTAssertNil(engine.query)
+        // Confirmed later in another capture, it works.
+        engine.textTargetConfirmed = true
+        type(":gif", into: &engine)
+        XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true))
+    }
+
+    func testGifMixedCase() {
+        for word in ["Gif", "gIF", "giF"] {
+            var engine = makeEngine()
+            type(":\(word)", into: &engine)
+            XCTAssertEqual(engine.feed(.text(" ")), TriggerResult(.openGIFSearch(deleteCount: 4), swallow: true), word)
+        }
+    }
+
+    // MARK: Strip engagement
+
+    func testUpOnUnengagedStripPassesThrough() {
+        var engine = makeEngine()
+        type("a :", into: &engine)
+        let result = engine.feed(.up)
+        XCTAssertFalse(result.swallow)
+        XCTAssertEqual(result.action, .hide)
+        XCTAssertNil(engine.query)
+    }
+
+    func testListLeftRightOnStripPassThrough() {
+        for key: KeyInput in [.left, .right] {
+            var engine = makeEngine()
+            type(":", into: &engine)
+            let result = engine.feed(key)
+            XCTAssertFalse(result.swallow, "\(key)")
+            XCTAssertEqual(result.action, .hide, "\(key)")
+        }
+    }
+
+    func testCompactStripEngagesOnlyWithRight() {
+        for key: KeyInput in [.left, .up, .down] {
+            var engine = makeEngine(horizontal: true)
+            type(":", into: &engine)
+            let result = engine.feed(key)
+            XCTAssertFalse(result.swallow, "\(key)")
+            XCTAssertEqual(result.action, .hide, "\(key)")
+        }
+        var engine = makeEngine(horizontal: true)
+        type(":", into: &engine)
+        XCTAssertEqual(engine.feed(.right), TriggerResult(.moveSelection(0), swallow: true))
+        // Once engaged, every arrow moves.
+        XCTAssertEqual(engine.feed(.left), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.up), TriggerResult(.moveSelection(-1), swallow: true))
+    }
+
+    func testSpaceColonDownEnterInsertsFirstRecent() {
+        var engine = makeEngine()
+        type("a :", into: &engine)
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(0), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 1), swallow: true))
+    }
+
+    func testQueryArrowsMoveImmediately() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        XCTAssertEqual(engine.feed(.up), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+    }
+
+    // MARK: Emoticons
+
+    func testEmoticonsKeepEnterNative() {
+        for face in [":)", ":(", ":D", ":P", ":-)", ":-P", ":/", ":-D", ":-(", ":-/", ":+D"] {
+            for key: KeyInput in [.enter, .tab] {
+                var engine = makeEngine()
+                type("hi \(face)", into: &engine)
+                let result = engine.feed(key)
+                XCTAssertFalse(result.swallow, "\(face) \(key)")
+                if case .commitSelection = result.action { XCTFail("\(face) commits") }
+            }
+        }
+    }
+
+    func testEmoticonsKeepEnterNativeWithMinimumOne() {
+        for face in [":)", ":(", ":-)", ":-P", ":/"] {
+            var engine = makeEngine(minQueryLength: 1)
+            type("hi \(face)", into: &engine)
+            XCTAssertFalse(engine.feed(.enter).swallow, face)
+        }
+    }
+
+    func testMinusOneStillWorks() {
+        var engine = makeEngine()
+        type("ok :-", into: &engine)
+        XCTAssertEqual(type("1", into: &engine), TriggerResult(.show(query: "-1")))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 3), swallow: true))
+
+        engine = makeEngine()
+        type(":-1", into: &engine)
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.commitShortcode("-1", deleteCount: 3), swallow: true))
+
+        engine = makeEngine()
+        XCTAssertEqual(type(":+1", into: &engine), TriggerResult(.show(query: "+1")))
+    }
+
+    // MARK: Keep-open failure
+
+    func testKeepOpenFailureRestoresCapture() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        engine.keepOpenInsertFailed()
+        XCTAssertFalse(engine.isMultiInserting)
+        XCTAssertEqual(engine.typedLength, 4, ":joy is still in the app")
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 4), swallow: true))
+    }
+
+    func testKeepOpenFailureAfterSuccessfulInsertKeepsMultiInsert() {
+        var engine = makeEngine()
+        type(":joy", into: &engine)
+        _ = engine.feed(.commandEnter)
+        XCTAssertEqual(engine.feed(.commandEnter), TriggerResult(.commitSelectionKeepOpen(deleteCount: 0), swallow: true))
+        engine.keepOpenInsertFailed()
+        XCTAssertTrue(engine.isMultiInserting)
+        XCTAssertEqual(engine.typedLength, 0)
     }
 
     func testGifShortcodeClosingTriggerStillWorks() {

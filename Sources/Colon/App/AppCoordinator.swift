@@ -3,12 +3,6 @@ import Combine
 import ColonCore
 import KeyboardShortcuts
 
-extension Notification.Name {
-    /// Posted on the main thread when `<trigger>gif` + space asks for GIF search;
-    /// `userInfo["context"]` is the `PredictionContext` of the app being typed in.
-    static let colonOpenGIFSearch = Notification.Name("ColonOpenGIFSearch")
-}
-
 extension KeyboardShortcuts.Name {
     /// Opens the picker in search mode from anywhere. Default ⌃⌥⌘E (Ctrl-Option-Cmd-E).
     static let openPicker = Self("openPicker", default: .init(.e, modifiers: [.control, .option, .command]))
@@ -139,17 +133,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         return engine.output(for: emoji)
     }
 
-    func inputCommitSelectionKeepOpen() -> String? {
-        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
-        engine.recordUse(emoji)
-        return engine.output(for: emoji)
-    }
-
-    func inputOpenGIFSearch(context: PredictionContext) {
-        // GIF search lives in Colon/GIF; it observes this and opens its panel for the frontmost app.
-        NotificationCenter.default.post(name: .colonOpenGIFSearch, object: self, userInfo: ["context": context])
-    }
-
     func inputCommit(shortcode: String) -> String? {
         defer { inputHide() }
         guard let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) else { return nil }
@@ -163,5 +146,25 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
 
     func inputPickerIsVisible() -> Bool {
         picker.isVisible && picker.selectedSuggestion != nil
+    }
+
+    // MARK: v0.4 input
+
+    /// GIF search panel; the GIF controller assigns itself here in `start()`.
+    var gifPicker: GIFPicking?
+
+    /// ⌘↩: insert the selection but leave the picker (and the capture) open.
+    func inputCommitSelectionKeepOpen() -> String? {
+        guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
+        engine.recordUse(emoji)
+        return engine.output(for: emoji)
+    }
+
+    func inputOpenGIFSearch(context: PredictionContext, pendingText: String) {
+        openGIFSearch(context: context, pendingText: pendingText)
+    }
+
+    func openGIFSearch(context: PredictionContext, pendingText: String) {
+        gifPicker?.show(context: context, pendingText: pendingText)
     }
 }

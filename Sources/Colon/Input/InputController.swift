@@ -22,8 +22,10 @@ protocol InputControllerDelegate: AnyObject {
     /// The picker is on screen with a selectable row (`picker.isVisible && picker.selectedSuggestion != nil`).
     /// Picker keys are swallowed only while this is true.
     func inputPickerIsVisible() -> Bool
-    /// `<trigger>gif` + space: the typed text has been deleted; open GIF search for the frontmost app.
-    func inputOpenGIFSearch(context: PredictionContext)
+    /// `<trigger>gif` + space: `<trigger>gif` has been deleted; open GIF search for the frontmost app.
+    /// `pendingText` is what was typed after the space before this call (seed for the search field).
+    /// Always called asynchronously, never from inside the tap callback.
+    func inputOpenGIFSearch(context: PredictionContext, pendingText: String)
 }
 
 /// Owns the CGEventTap, runs `TriggerEngine`, honours exclusions/secure input,
@@ -82,6 +84,13 @@ final class InputController: ObservableObject {
     private var captureID = 0
     private var probeInFlight = false
     private var latestQuery = ""
+    /// This capture's focus probe found a readable, non-secure text element.
+    private var focusUsable = false
+    /// The bare-trigger strip may show (its delay passed without another key).
+    private var stripDelayElapsed = false
+    private var stripWork: DispatchWorkItem?
+    /// Printable keys typed after `:gif ` until the GIF panel opens. Never logged.
+    private var gifPending: (text: String, deadline: Date)?
     private var anchor: CGRect?
     private var context = PredictionContext()
     private var idleWork: DispatchWorkItem?
@@ -94,8 +103,11 @@ final class InputController: ObservableObject {
     /// A capture with no keystroke for this long is abandoned.
     private static let idleTimeout: TimeInterval = 10
     private static let healthInterval: TimeInterval = 2
-    /// Lets the deletion of `:gif` reach the target app before the GIF panel takes the keyboard.
-    private static let gifOpenDelay: TimeInterval = 0.08
+    /// The bare-trigger strip waits this long for another key, so `a :)` or `Time: ` never flash it.
+    private static let stripDelay: TimeInterval = 0.1
+    /// Keys typed after `:gif ` are held for the GIF search field for at most this long / this many.
+    private static let gifPendingWindow: TimeInterval = 0.5
+    private static let gifPendingLimit = 64
 
     // MARK: Lifecycle
 
@@ -277,6 +289,7 @@ final class InputController: ObservableObject {
             return pass
         }
         if SyntheticEvent.isSynthetic(event) { return pass }
+        if gifPending != nil, let held = holdForGIFSearch(event) { return held }
 
         if let reason = silenceReason() {
             if engine.isTracking {
@@ -291,6 +304,8 @@ final class InputController: ObservableObject {
         // shown it (the focus probe may still be running) and the UI confirms a selection.
         let visible = pickerVisible && (delegate?.inputPickerIsVisible() ?? false)
         let wasMultiInserting = engine.isMultiInserting
+        cancelStrip()
+        engine.textTargetConfirmed = focusUsable
         let result = engine.handle(input, pickerVisible: visible)
         if wasMultiInserting, !engine.isMultiInserting, !result.swallow {
             // A key that closes multi-insert ends that capture (a fresh trigger starts a new one,
@@ -304,7 +319,12 @@ final class InputController: ObservableObject {
             show(query: query)
         case .hide:
             InputLog.debug("hide")
-            endCapture(notifyDelegate: true)
+            if engine.isTracking {
+                // Still capturing (e.g. below the minimum length): keep the anchor and probe result.
+                hidePicker()
+            } else {
+                endCapture(notifyDelegate: true)
+            }
         case .moveSelection(let delta):
             delegate?.inputMoveSelection(by: delta)
         case .commitSelection(let deleteCount):
@@ -319,6 +339,12 @@ final class InputController: ObservableObject {
         case .openGIFSearch(let deleteCount):
             openGIFSearch(deleteCount: deleteCount, proxy: proxy)
             return nil
+        }
+        // Probe the focused element as soon as a trigger is typed: the anchor, the context and the
+        // GIF trigger's text-field check all come from it.
+        if engine.isTracking, !focusUsable, !probeInFlight {
+            InputLog.debug("capture started, probing focus")
+            probe(captureID: captureID, attempt: 0)
         }
         if engine.isTracking { scheduleIdleTimeout() } else { cancelIdleTimeout() }
         return result.swallow ? nil : pass
@@ -339,12 +365,12 @@ final class InputController: ObservableObject {
     }
 
     /// ⌘↩ was swallowed: insert the selection and leave the picker up for the next pick. Without a
-    /// selection the capture ends and the key is delivered after all.
+    /// selection the key stays swallowed (re-posting ⌘↩ would send the message) and nothing changes.
     private func commitSelectionKeepOpen(deleteCount: Int, key: CGEvent, proxy: CGEventTapProxy) {
         guard let text = delegate?.inputCommitSelectionKeepOpen() else {
-            InputLog.debug("keep-open commit with no selection, re-posting key")
-            resetCapture()
-            repost(key, proxy: proxy)
+            InputLog.debug("keep-open commit with no selection, key swallowed")
+            engine.keepOpenInsertFailed()
+            scheduleIdleTimeout()
             return
         }
         InputLog.debug("commit selection (keep open), deleteCount \(deleteCount)")
@@ -352,22 +378,46 @@ final class InputController: ObservableObject {
         scheduleIdleTimeout()
     }
 
-    /// `:gif` + space (swallowed): delete `:gif`, close the emoji picker and hand over to GIF search.
+    /// `:gif` + space (swallowed; the engine only allows it after a usable focus probe): delete
+    /// `:gif`, close the emoji picker and open GIF search on the next main-queue turn. Keys typed
+    /// until then are held for its search field.
     private func openGIFSearch(deleteCount: Int, proxy: CGEventTapProxy) {
         let app = frontmostApp
-        var context = self.context
-        if context.appName == nil, context.bundleID == nil {
-            context = PredictionContext(appName: app?.localizedName, bundleID: app?.bundleIdentifier)
-        }
+        let context = self.context
         endCapture(notifyDelegate: true)
         InputLog.debug("open GIF search, deleteCount \(deleteCount)")
         // Pure deletion: backspaces work the same for both insertion methods.
         Inserter.replace(deleteCount: deleteCount, with: "", method: .typing, poster: .tap(proxy))
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.gifOpenDelay) { [weak self] in
+        gifPending = ("", Date().addingTimeInterval(Self.gifPendingWindow))
+        DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, NSWorkspace.shared.frontmostApplication == app else { return }
-                self.delegate?.inputOpenGIFSearch(context: context)
+                guard let self else { return }
+                let pendingText = self.gifPending?.text ?? ""
+                self.gifPending = nil
+                guard NSWorkspace.shared.frontmostApplication == app else { return }
+                self.delegate?.inputOpenGIFSearch(context: context, pendingText: pendingText)
             }
+        }
+    }
+
+    /// While GIF search is opening, printable keys (and backspace over them) are swallowed into the
+    /// pending text; anything else, the size limit or the time limit ends holding. Returns nil when
+    /// the event should go through normal handling.
+    private func holdForGIFSearch(_ event: CGEvent) -> Unmanaged<CGEvent>?? {
+        guard let pending = gifPending, Date() < pending.deadline, silenceReason() == nil else {
+            gifPending = nil
+            return nil
+        }
+        switch translate(event) {
+        case .text(let text) where pending.text.count + text.count <= Self.gifPendingLimit:
+            gifPending?.text += text
+            return .some(nil)
+        case .backspace where !pending.text.isEmpty:
+            gifPending?.text.removeLast()
+            return .some(nil)
+        default:
+            gifPending = nil
+            return nil
         }
     }
 
@@ -422,10 +472,15 @@ final class InputController: ObservableObject {
         case kVK_Return, kVK_ANSI_KeypadEnter: return .enter
         case kVK_Tab: return .tab
         case kVK_Escape: return .escape
-        case kVK_UpArrow: return .up
-        case kVK_DownArrow: return .down
-        case kVK_LeftArrow: return .left
-        case kVK_RightArrow: return .right
+        case kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow, kVK_RightArrow:
+            // ⇧/⌥ arrows select text or jump words: native, and the capture cannot follow.
+            if flags.contains(.maskShift) || flags.contains(.maskAlternate) { return .interrupt }
+            switch keyCode {
+            case kVK_UpArrow: return .up
+            case kVK_DownArrow: return .down
+            case kVK_LeftArrow: return .left
+            default: return .right
+            }
         case kVK_ForwardDelete, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Help:
             return .interrupt
         default:
@@ -448,13 +503,49 @@ final class InputController: ObservableObject {
 
     private func show(query: String) {
         latestQuery = query
-        if pickerVisible {
-            InputLog.debug("show query \(query)")
-            delegate?.inputShow(query: query, caret: anchor, context: context)
-        } else if !probeInFlight {
-            InputLog.debug("capture started, probing focus")
-            probe(captureID: captureID, attempt: 0)
+        if query.isEmpty, !pickerVisible, !stripDelayElapsed {
+            scheduleStrip()
+            return
         }
+        presentIfReady()
+    }
+
+    /// Shows or updates the picker once the focus probe succeeded (and, for the bare-trigger strip,
+    /// once its delay has passed).
+    private func presentIfReady() {
+        guard engine.isShowing, focusUsable else { return }
+        if latestQuery.isEmpty, !pickerVisible, !stripDelayElapsed { return }
+        pickerVisible = true
+        InputLog.debug("show query \(latestQuery)")
+        delegate?.inputShow(query: latestQuery, caret: anchor, context: context)
+    }
+
+    private func scheduleStrip() {
+        stripWork?.cancel()
+        let id = captureID
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, id == self.captureID else { return }
+                self.stripWork = nil
+                self.stripDelayElapsed = true
+                self.presentIfReady()
+            }
+        }
+        stripWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.stripDelay, execute: work)
+    }
+
+    private func cancelStrip() {
+        stripWork?.cancel()
+        stripWork = nil
+    }
+
+    /// Hides the picker but keeps the capture (anchor, probe result) alive.
+    private func hidePicker() {
+        cancelStrip()
+        let wasVisible = pickerVisible
+        pickerVisible = false
+        if wasVisible { delegate?.inputHide() }
     }
 
     /// Reads the focused element off the main thread one hop after the key, so the target app has
@@ -479,19 +570,19 @@ final class InputController: ObservableObject {
     }
 
     private func finishProbe(_ result: FocusProbe, captureID id: Int, attempt: Int, app: NSRunningApplication?) {
-        guard id == captureID, engine.isShowing, frontmostApp == app else {
+        guard id == captureID, engine.isTracking, frontmostApp == app else {
             if id == captureID { probeInFlight = false }
             return
         }
         switch result.status {
         case .usable:
             probeInFlight = false
+            focusUsable = true
             anchor = result.anchor ?? CaretLocator.mouseAnchor()
             context = PredictionContext(appName: app?.localizedName, bundleID: app?.bundleIdentifier,
                                         textBeforeTrigger: settings.sendTextContext ? result.textBeforeTrigger : nil)
-            pickerVisible = true
-            InputLog.debug("show query \(latestQuery) (anchor \(result.anchor == nil ? "mouse" : "ax"))")
-            delegate?.inputShow(query: latestQuery, caret: anchor, context: context)
+            InputLog.debug("focus usable (anchor \(result.anchor == nil ? "mouse" : "ax"))")
+            presentIfReady()
         case .noFocusedElement where attempt < Self.probeRetryDelays.count:
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.probeRetryDelays[attempt]) { [weak self] in
                 MainActor.assumeIsolated { self?.retryProbe(captureID: id, attempt: attempt + 1) }
@@ -505,7 +596,7 @@ final class InputController: ObservableObject {
     }
 
     private func retryProbe(captureID id: Int, attempt: Int) {
-        guard id == captureID, engine.isShowing else {
+        guard id == captureID, engine.isTracking else {
             if id == captureID { probeInFlight = false }
             return
         }
@@ -524,6 +615,9 @@ final class InputController: ObservableObject {
     private func endCapture(notifyDelegate: Bool) {
         captureID &+= 1
         probeInFlight = false
+        focusUsable = false
+        stripDelayElapsed = false
+        cancelStrip()
         anchor = nil
         context = PredictionContext()
         latestQuery = ""
@@ -599,24 +693,24 @@ final class InputController: ObservableObject {
         })
 
         // `@Published` emits before the property changes, so use the emitted values.
-        Publishers.CombineLatest3(settings.$triggerString, settings.$minQueryLength,
-                                  settings.$autoReplaceOnClosingTrigger)
-            .sink { [weak self] trigger, minLength, autoReplace in
-                self?.configureEngine(trigger: trigger, minQueryLength: minLength, autoReplace: autoReplace)
-            }
-            .store(in: &cancellables)
+        Publishers.CombineLatest(
+            Publishers.CombineLatest3(settings.$triggerString, settings.$minQueryLength,
+                                      settings.$autoReplaceOnClosingTrigger),
+            Publishers.CombineLatest3(settings.$showRecentsOnTrigger, settings.$pickerLayout,
+                                      settings.$gifSearchEnabled)
+        )
+        .sink { [weak self] typing, features in
+            self?.configureEngine(EngineConfiguration(
+                trigger: typing.0, minQueryLength: typing.1, autoReplace: typing.2,
+                showsRecents: features.0, horizontalLayout: features.1 == .compact, gifSearch: features.2))
+        }
+        .store(in: &cancellables)
         // Delivered after the property is set, so `checkHealth` sees the new value and tears the
         // tap down (disabled) or installs it (enabled) right away.
         settings.$isEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.checkHealth() }
-            .store(in: &cancellables)
-        // Read the emitted values: `@Published` publishes in willSet.
-        Publishers.CombineLatest3(settings.$showRecentsOnTrigger, settings.$pickerLayout, settings.$gifSearchEnabled)
-            .sink { [weak self] recents, layout, gif in
-                self?.configureFeatures(showsRecents: recents, horizontal: layout == .compact, gif: gif)
-            }
             .store(in: &cancellables)
         settings.$excludedBundleIDs
             .sink { [weak self] excluded in
@@ -639,28 +733,36 @@ final class InputController: ObservableObject {
         }
     }
 
-    private func configureEngine(trigger: String, minQueryLength: Int, autoReplace: Bool) {
-        let trigger = AppSettings.isValidTrigger(trigger) ? trigger : ":"
-        let minQueryLength = max(1, minQueryLength)
-        guard trigger != engine.trigger || minQueryLength != engine.minQueryLength
-                || autoReplace != engine.autoReplaceOnClosingTrigger else { return }
-        resetCapture()
-        engine.trigger = trigger
-        engine.minQueryLength = minQueryLength
-        engine.autoReplaceOnClosingTrigger = autoReplace
-        InputLog.debug("engine configured: trigger \(trigger), min \(minQueryLength), autoReplace \(autoReplace)")
+    private struct EngineConfiguration: Equatable {
+        var trigger: String
+        var minQueryLength: Int
+        var autoReplace: Bool
+        var showsRecents: Bool
+        var horizontalLayout: Bool
+        var gifSearch: Bool
     }
 
-    /// Recents, layout and GIF switches change only how the next keys are read, so an open capture
-    /// keeps going (a layout switch applies to the very next arrow key).
-    private func configureFeatures(showsRecents: Bool, horizontal: Bool, gif: Bool) {
-        if showsRecents != engine.showsRecentsOnTrigger, engine.query?.isEmpty == true, !engine.isMultiInserting {
-            // The bare-trigger strip would appear or linger against the new setting.
-            resetCapture()
-        }
-        engine.showsRecentsOnTrigger = showsRecents
-        engine.horizontalLayout = horizontal
-        engine.gifSearchEnabled = gif
+    /// Applies settings to the engine. Anything that changes how the open capture is read (trigger,
+    /// minimum, auto replace, recents, layout) resets it; the GIF switch only affects the next space.
+    private func configureEngine(_ wanted: EngineConfiguration) {
+        var wanted = wanted
+        wanted.trigger = AppSettings.isValidTrigger(wanted.trigger) ? wanted.trigger : ":"
+        wanted.minQueryLength = max(1, wanted.minQueryLength)
+        let current = EngineConfiguration(
+            trigger: engine.trigger, minQueryLength: engine.minQueryLength,
+            autoReplace: engine.autoReplaceOnClosingTrigger, showsRecents: engine.showsRecentsOnTrigger,
+            horizontalLayout: engine.horizontalLayout, gifSearch: engine.gifSearchEnabled)
+        guard wanted != current else { return }
+        var unchangedButGIF = wanted
+        unchangedButGIF.gifSearch = current.gifSearch
+        if unchangedButGIF != current { resetCapture() }
+        engine.trigger = wanted.trigger
+        engine.minQueryLength = wanted.minQueryLength
+        engine.autoReplaceOnClosingTrigger = wanted.autoReplace
+        engine.showsRecentsOnTrigger = wanted.showsRecents
+        engine.horizontalLayout = wanted.horizontalLayout
+        engine.gifSearchEnabled = wanted.gifSearch
+        InputLog.debug("engine configured: trigger \(wanted.trigger), min \(wanted.minQueryLength), autoReplace \(wanted.autoReplace), recents \(wanted.showsRecents), compact \(wanted.horizontalLayout), gif \(wanted.gifSearch)")
     }
 
     /// IMEs (Japanese, Chinese, …) compose text the tap cannot see; stay silent while one is active.

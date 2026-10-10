@@ -91,7 +91,7 @@ public final class SuggestionEngine: ObservableObject {
 
     /// Recompute local results synchronously, then (debounced) ask Jev to rerank.
     /// The same query with only a new context (e.g. the AX anchor/text arriving late) keeps the
-    /// local results and just reschedules Jev. An empty query (the bare trigger) publishes the
+    /// local results and just reschedules Jev. The raw empty query (the bare trigger) publishes the
     /// recents strip and never calls Jev.
     public func update(query: String, context: PredictionContext) {
         let normalized = EmojiSearch.normalize(query)
@@ -105,6 +105,12 @@ public final class SuggestionEngine: ObservableObject {
 
         guard !normalized.isEmpty else {
             localPool = []
+            guard query.isEmpty else {
+                // Only the bare trigger shows recents; text that normalises away (`::`, spaces) shows nothing.
+                suggestions = []
+                orderFrozen = false
+                return
+            }
             // Rebuilding on a context-only update would reorder the strip under a moved highlight.
             if !(startingSession && orderFrozen && !suggestions.isEmpty) {
                 orderFrozen = false

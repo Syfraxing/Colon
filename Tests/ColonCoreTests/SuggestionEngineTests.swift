@@ -375,6 +375,18 @@ final class SuggestionEngineTests: XCTestCase {
         XCTAssertEqual(engine.suggestions.first?.id, "rocket")
     }
 
+    func testRecentsOnlyForRawEmptyQuery() async {
+        let engine = makeEngine()
+        for query in ["::", " ", ":", "  "] {
+            engine.update(query: query, context: PredictionContext())
+            XCTAssertEqual(engine.suggestions, [], query.debugDescription)
+        }
+        engine.update(query: "", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.count, SuggestionEngine.recentsLimit)
+        try? await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(jev.calls.isEmpty)
+    }
+
     func testTypingAfterRecentsSearchesNormally() {
         let engine = makeEngine()
         engine.update(query: "", context: PredictionContext())
