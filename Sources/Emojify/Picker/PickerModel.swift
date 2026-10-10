@@ -50,6 +50,8 @@ final class PickerModel: ObservableObject {
     var onPick: ((Emoji) -> Void)?
     var onCancel: (() -> Void)?
     var onSearchTextChange: ((String) -> Void)?
+    /// After every engine sync, so the controller can hide on an empty list.
+    var onSynced: (() -> Void)?
 
     weak var searchField: NSTextField?
 
@@ -61,7 +63,9 @@ final class PickerModel: ObservableObject {
 
     // MARK: Derived
 
-    var isGridVisible: Bool { mode == .search && searchText.trimmingCharacters(in: .whitespaces).isEmpty }
+    var isGridVisible: Bool { mode == .search && showsGrid }
+    /// The search view shows the grid for an empty query.
+    var showsGrid: Bool { searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var selectedSuggestion: Suggestion? {
         suggestions.indices.contains(selectedIndex) ? suggestions[selectedIndex] : nil
@@ -91,6 +95,7 @@ final class PickerModel: ObservableObject {
         guard syncScheduled else { return }
         syncScheduled = false
         apply(snapshotProvider())
+        onSynced?()
     }
 
     /// Forces a fresh read, e.g. right before showing.
@@ -212,10 +217,6 @@ final class PickerModel: ObservableObject {
         self.sections = sections
         gridSelection = GridPosition(section: 0, item: 0)
         if let first = sections.first { requestScroll("section/\(first.id)") }
-    }
-
-    func endSearch() {
-        searchText = ""
     }
 
     func searchTextDidChange(_ text: String) {

@@ -14,7 +14,7 @@ struct SearchPickerView: View {
                 .frame(height: PickerMetrics.searchFieldHeight)
             Rectangle().fill(theme.divider).frame(height: 1)
             Group {
-                if model.isGridVisible {
+                if model.showsGrid {
                     VStack(spacing: 0) {
                         CategoryStrip(model: model, theme: theme)
                         EmojiGrid(model: model, theme: theme)
@@ -55,7 +55,7 @@ struct SearchPickerView: View {
                 .foregroundStyle(theme.tertiary)
             SearchField(model: model, theme: theme)
                 .frame(height: 24)
-            if model.isRefining || model.jevStatus != .idle, !model.isGridVisible {
+            if model.isRefining || model.jevStatus != .idle, !model.showsGrid {
                 JevBadge(status: model.jevStatus, isRefining: model.isRefining, theme: theme)
                     .transition(.opacity)
             }
@@ -208,6 +208,7 @@ private struct EmojiCell: View {
     var body: some View {
         Text(glyph)
             .font(.system(size: 26))
+            .fixedSize()
             .frame(width: PickerMetrics.gridCell, height: PickerMetrics.gridCell)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -225,7 +226,7 @@ private struct SearchFooter: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            if let emoji = model.currentEmoji {
+            if let emoji = model.showsGrid ? model.selectedGridEmoji : model.selectedSuggestion?.emoji {
                 Text(model.displayText(emoji))
                     .font(.system(size: 26))
                     .frame(width: 32)
@@ -243,7 +244,7 @@ private struct SearchFooter: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
-                Keycap(model.isGridVisible ? "←↑↓→" : "↑↓", theme: theme)
+                Keycap(model.showsGrid ? "←↑↓→" : "↑↓", theme: theme)
                 Text("move").foregroundStyle(theme.tertiary)
                 Keycap("↩", theme: theme).padding(.leading, 4)
                 Text("insert").foregroundStyle(theme.tertiary)

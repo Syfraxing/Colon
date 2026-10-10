@@ -198,16 +198,30 @@ struct SuggestionRow: View {
             Spacer(minLength: 8)
             if let probability = suggestion.jevProbability {
                 JevMeter(probability: probability, theme: theme)
-            } else {
-                Text(suggestion.emoji.name)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            } else if !Self.nameRepeats(code: code, name: suggestion.emoji.name) {
+                // Full name, else a truncated one with real words, else nothing (never a stray letter).
+                ViewThatFits(in: .horizontal) {
+                    nameText.fixedSize()
+                    nameText.frame(width: 72, alignment: .trailing)
+                    Color.clear.frame(width: 0, height: 0)
+                }
             }
         }
         .padding(.horizontal, 10)
         .frame(height: PickerMetrics.rowHeight)
+    }
+
+    /// `:fire:` next to "fire" says nothing new.
+    private static func nameRepeats(code: String, name: String) -> Bool {
+        code.replacingOccurrences(of: "_", with: " ").lowercased() == name.lowercased()
+    }
+
+    private var nameText: some View {
+        Text(suggestion.emoji.name)
+            .font(.system(size: 11))
+            .foregroundStyle(theme.tertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 }
 
@@ -431,6 +445,7 @@ struct RefiningShimmer: View {
             }
         }
         .frame(height: 1.5)
+        .padding(.top, 0.5)
         .padding(.horizontal, PickerMetrics.cornerRadius)
         .allowsHitTesting(false)
     }

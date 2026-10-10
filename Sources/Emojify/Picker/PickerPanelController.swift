@@ -22,11 +22,16 @@ final class PickerPanelController {
 
     private var cancellables = Set<AnyCancellable>()
     private var clickMonitors: [Any] = []
-    private var isShown = false
+    /// Requested by `show`/`showSearch` and not yet hidden.
+    private var isActive = false
+    /// The panel is actually ordered in (inline mode skips this while the list is empty).
+    private var isOnScreen = false
     /// Bumped on every show so a pending fade-out never orders out a re-shown panel.
     private var presentationToken = 0
     /// Caret rect the inline panel was positioned for; x stays anchored while the query grows.
     private var anchorCaret: CGRect?
+    /// The anchor came from the mouse because no caret was known yet.
+    private var anchorIsFallback = false
     private var searchContext = PredictionContext()
     private lazy var categorySections = EmojiCatalog.categorySections(from: store)
 
@@ -54,33 +59,38 @@ final class PickerPanelController {
         engine.objectWillChange
             .sink { [weak model] _ in model?.scheduleSync() }
             .store(in: &cancellables)
+        model.onSynced = { [weak self] in self?.updateInlinePresence() }
 
         let center = NotificationCenter.default
         center.publisher(for: NSWindow.didResignKeyNotification, object: panel)
             .sink { [weak self] _ in
-                guard let self, self.isShown, self.model.mode == .search else { return }
+                guard let self, self.isOnScreen, self.model.mode == .search else { return }
                 self.dismiss()
             }
             .store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
             .sink { [weak self] _ in
-                guard let self, self.isShown else { return }
+                guard let self, self.isOnScreen else { return }
                 self.dismiss()
             }
             .store(in: &cancellables)
         center.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
-                guard let self, self.isShown else { return }
+                guard let self, self.isOnScreen else { return }
                 self.dismiss()
             }
             .store(in: &cancellables)
 
         model.syncNow()
         hostingView.layoutSubtreeIfNeeded()
+        // Group the catalog off the show path so the first hotkey press does not pay for it.
+        DispatchQueue.main.async { [weak self] in _ = self?.categorySections }
     }
 
+    /// True while the panel is on screen. In inline mode an empty result list keeps the panel
+    /// hidden (the input layer then lets Enter/Tab/arrows through).
     var isVisible: Bool {
-        isShown
+        isOnScreen
     }
 
     /// Currently highlighted suggestion.
@@ -89,54 +99,52 @@ final class PickerPanelController {
         return model.selectedSuggestion
     }
 
-    /// Show (or reposition) near `caret` (Cocoa screen coords). nil caret: near the mouse.
+    /// Whether `screenPoint` (Cocoa screen coords) falls on the visible card, so the input layer
+    /// can let clicks on the picker through instead of treating them as an interruption.
+    func contains(screenPoint: CGPoint) -> Bool {
+        guard isOnScreen else { return false }
+        return cardRectInWindow.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY).contains(screenPoint)
+    }
+
+    /// Show (or update) near `caret` (Cocoa screen coords). nil caret: near the mouse.
+    /// Repeated calls while active only update/resize; the panel stays anchored at the first
+    /// anchor (the trigger character) unless a real anchor replaces a fallback one.
     func show(near caret: CGRect?) {
-        let caretRect = caret ?? Self.mouseAnchor()
         let switching = model.mode != .inline
         if switching {
+            if isOnScreen { retract(animated: false) }
             model.mode = .inline
             panel.allowsKey = false
         }
         model.maxRows = settings.maxResults
         model.syncNow()
 
-        if !isShown || switching || needsReposition(for: caretRect) {
-            positionInline(for: caretRect)
-            anchorCaret = caretRect
+        if let caret {
+            if anchorCaret == nil || anchorIsFallback || needsReposition(for: caret) {
+                anchorCaret = caret
+                anchorIsFallback = false
+                positionInline(for: caret)
+            }
+        } else if anchorCaret == nil {
+            let fallback = Self.mouseAnchor()
+            anchorCaret = fallback
+            anchorIsFallback = true
+            positionInline(for: fallback)
         }
-        if !isShown || switching { present(makeKey: false) }
+        isActive = true
+        updateInlinePresence()
     }
 
+    /// Programmatic hide. Never calls `onDismiss`.
     func hide() {
-        guard isShown else { return }
-        isShown = false
+        guard isActive else { return }
+        isActive = false
         anchorCaret = nil
-        removeClickMonitors()
-        let token = presentationToken
-        let wasSearch = model.mode == .search
+        anchorIsFallback = false
         panel.allowsKey = false
-
-        if model.reduceMotion {
-            model.isPresented = false
-            panel.alphaValue = 0
-            panel.orderOut(nil)
-        } else {
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.1
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                panel.animator().alphaValue = 0
-            }, completionHandler: { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.presentationToken == token else { return }
-                    self.panel.orderOut(nil)
-                }
-            })
-            withAnimation(.easeIn(duration: 0.1)) { model.isPresented = false }
-        }
-        if wasSearch {
-            model.endSearch()
-            searchContext = PredictionContext()
-        }
+        retract(animated: true)
+        // The search text stays during the fade; `beginSearch` clears it on the next open.
+        searchContext = PredictionContext()
     }
 
     /// Search mode (global hotkey): the panel becomes key and shows its own search field
@@ -144,6 +152,7 @@ final class PickerPanelController {
     func showSearch() {
         let target = NSWorkspace.shared.frontmostApplication
         searchContext = PredictionContext(appName: target?.localizedName, bundleID: target?.bundleIdentifier)
+        if isOnScreen { retract(animated: false) }
 
         var sections = categorySections
         if let frequent = EmojiCatalog.frequentSection(store: store, usage: usage) {
@@ -154,8 +163,10 @@ final class PickerPanelController {
         model.beginSearch(sections: sections)
         model.syncNow()
 
-        positionSearch()
         anchorCaret = nil
+        anchorIsFallback = false
+        positionSearch()
+        isActive = true
         panel.allowsKey = true
         present(makeKey: true)
         focusSearchField(retries: 3)
@@ -167,10 +178,21 @@ final class PickerPanelController {
 
     // MARK: Presentation
 
+    /// Inline: on screen exactly when active with at least one suggestion.
+    private func updateInlinePresence() {
+        guard model.mode == .inline else { return }
+        let wanted = isActive && !model.suggestions.isEmpty
+        if wanted && !isOnScreen {
+            present(makeKey: false)
+        } else if !wanted && isOnScreen {
+            retract(animated: false)
+        }
+    }
+
     private func present(makeKey: Bool) {
         presentationToken += 1
         let wasOnScreen = panel.isVisible
-        isShown = true
+        isOnScreen = true
         installClickMonitors()
 
         if makeKey {
@@ -196,8 +218,38 @@ final class PickerPanelController {
         withAnimation(.pickerEase(0.15)) { model.isPresented = true }
     }
 
+    /// Takes the panel off screen: a 100 ms fade, or at once (empty list, mode switch, reduce motion).
+    private func retract(animated: Bool) {
+        guard isOnScreen else { return }
+        isOnScreen = false
+        removeClickMonitors()
+        presentationToken += 1
+        let token = presentationToken
+
+        guard animated, !model.reduceMotion else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { model.isPresented = false }
+            panel.alphaValue = 0
+            panel.orderOut(nil)
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.1
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.presentationToken == token else { return }
+                self.panel.orderOut(nil)
+            }
+        })
+        withAnimation(.easeIn(duration: 0.1)) { model.isPresented = false }
+    }
+
+    /// A dismissal the panel starts itself (click outside, Space change, Esc in search mode).
     private func dismiss() {
-        guard isShown else { return }
+        guard isActive else { return }
         hide()
         onDismiss?()
     }
@@ -210,7 +262,7 @@ final class PickerPanelController {
         }
         guard retries > 0 else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isShown, self.model.mode == .search else { return }
+            guard let self, self.isOnScreen, self.model.mode == .search else { return }
             self.focusSearchField(retries: retries - 1)
         }
     }
@@ -235,11 +287,12 @@ final class PickerPanelController {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first
     }
 
-    /// Re-place only when the caret jumped to another line or screen; typing along the line keeps x fixed.
+    /// The anchor is the trigger character, fixed for a capture; only a genuinely different
+    /// anchor (another line, or a caret that moved left of it) moves the panel.
     private func needsReposition(for caret: CGRect) -> Bool {
         guard let anchor = anchorCaret else { return true }
         let tolerance = max(4, anchor.height / 2)
-        return abs(caret.midY - anchor.midY) > tolerance || caret.maxX < anchor.minX - 2
+        return abs(caret.midY - anchor.midY) > tolerance || caret.minX < anchor.minX - 2
     }
 
     private func positionInline(for caret: CGRect) {
@@ -337,7 +390,7 @@ final class PickerPanelController {
     }
 
     private func handleClick(atScreenPoint point: NSPoint) {
-        guard isShown else { return }
+        guard isOnScreen else { return }
         let card = cardRectInWindow.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
         if !card.contains(point) { dismiss() }
     }
@@ -346,12 +399,12 @@ final class PickerPanelController {
 extension PickerPanelController: PickerMouseHandling {
     func pickerMouseMoved(at windowPoint: NSPoint) -> Bool {
         guard model.mode == .inline else { return false }
-        if isShown, let index = rowIndex(at: windowPoint) { model.selectRow(index) }
+        if isOnScreen, let index = rowIndex(at: windowPoint) { model.selectRow(index) }
         return true
     }
 
     func pickerMouseDown(at windowPoint: NSPoint) -> Bool {
-        guard isShown else { return true }
+        guard isOnScreen else { return true }
         if !cardRectInWindow.contains(windowPoint) {
             dismiss()
             return true
