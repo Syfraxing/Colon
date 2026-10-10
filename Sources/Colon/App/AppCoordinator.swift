@@ -81,6 +81,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
             return
         }
         guard settings.isEnabled else { return }
+        gifPicker?.dismiss()
         input.cancelTracking()
         picker.hide()
         searchTargetApp = NSWorkspace.shared.frontmostApplication
@@ -91,6 +92,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     private func handleMousePick(_ emoji: Emoji) {
         let text = engine.output(for: emoji)
         engine.recordUse(emoji)
+        Feedback.inserted(settings)
         // Take the search target before hiding, so nothing the hide triggers (resign key) can clear it.
         let searchTarget = searchTargetApp
         searchTargetApp = nil
@@ -123,13 +125,19 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     }
 
     func inputMoveSelection(by delta: Int) {
-        picker.moveSelection(by: delta)
+        // Delta 0 is the input layer engaging the bare-trigger strip: highlight the first recent.
+        if delta == 0 {
+            picker.engage()
+        } else {
+            picker.moveSelection(by: delta)
+        }
     }
 
     func inputCommitSelection() -> String? {
         defer { inputHide() }
         guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
         engine.recordUse(emoji)
+        Feedback.inserted(settings)
         return engine.output(for: emoji)
     }
 
@@ -137,6 +145,7 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         defer { inputHide() }
         guard let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) else { return nil }
         engine.recordUse(emoji)
+        Feedback.inserted(settings)
         return engine.output(for: emoji)
     }
 
@@ -157,6 +166,8 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
     func inputCommitSelectionKeepOpen() -> String? {
         guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
         engine.recordUse(emoji)
+        Feedback.inserted(settings)
+        picker.noteInserted()
         return engine.output(for: emoji)
     }
 
