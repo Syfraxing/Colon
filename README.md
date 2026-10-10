@@ -79,6 +79,14 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 
 ## Install
 
+With [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask syfraxing/tap/colon
+```
+
+Then open Colon and continue at step 3. Or install by hand:
+
 1. Download `Colon-<version>.dmg` (or the `.zip`) from the
    [latest release](https://github.com/Syfraxing/Colon/releases/latest).
 2. Open it and drag **Colon** into **Applications**, then open Colon. Releases from 0.5.0
@@ -100,6 +108,8 @@ off in **Settings → About**), and **Check for Updates…** in the menu bar men
 Settings → About checks right away. Updates come from this repository's GitHub Releases
 over HTTPS and are installed only if both the feed and the download carry Colon's EdDSA
 release signature.
+Homebrew installs keep updating this way too (the cask is marked `auto_updates`, so
+`brew upgrade` skips Colon unless you pass `--greedy`).
 
 **Coming from 0.3.x or 0.4.x?** 0.5.0 moves from Colon's self-signed certificate to an
 Apple Developer ID. Check for Updates installs it as usual, but macOS treats the new
@@ -212,8 +222,10 @@ COLON_VERSION=1.2.0 make app    # override the version string
 **Releases.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests,
 builds a universal app signed with the Colon release certificate, attaches the `.zip`,
 `.dmg` and `SHA256SUMS.txt` to a GitHub Release, and publishes an EdDSA-signed Sparkle
-`appcast.xml` (made by `scripts/make-appcast.sh`) for in-app updates. CI also scans every
-commit for anything that looks like an API key or token.
+`appcast.xml` (made by `scripts/make-appcast.sh`) for in-app updates. A release that moves
+the feed then points the [Homebrew cask](https://github.com/Syfraxing/homebrew-tap) at the
+new DMG (`scripts/bump-cask.sh`, pushed with a write deploy key for that repo only). CI also
+scans every commit for anything that looks like an API key or token.
 
 ## How it works
 
