@@ -107,7 +107,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         } else {
             input.commitFromMouse(text)
         }
-        Feedback.inserted(settings)
         engine.reset()
     }
 
@@ -131,7 +130,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         defer { inputHide() }
         guard let emoji = picker.selectedSuggestion?.emoji else { return nil }
         engine.recordUse(emoji)
-        Feedback.inserted(settings)
         return engine.output(for: emoji)
     }
 
@@ -139,7 +137,6 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         defer { inputHide() }
         guard let emoji = EmojiStore.shared.emoji(forShortcode: shortcode) else { return nil }
         engine.recordUse(emoji)
-        Feedback.inserted(settings)
         return engine.output(for: emoji)
     }
 

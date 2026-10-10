@@ -12,7 +12,7 @@ struct CompactPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
-                if !model.suggestions.isEmpty {
+                if !model.suggestions.isEmpty && model.showsSelection {
                     SelectionPill(theme: theme, isTentative: model.isSelectionTentative, pulse: model.insertPulse)
                         .frame(width: PickerMetrics.compactCell, height: PickerMetrics.compactCell)
                         .offset(x: CGFloat(model.selectedIndex) * PickerMetrics.compactCell)
@@ -21,7 +21,7 @@ struct CompactPickerView: View {
                     ForEach(Array(model.suggestions.enumerated()), id: \.element.id) { index, suggestion in
                         PulsingGlyph(glyph: model.displayText(suggestion.emoji), id: suggestion.id,
                                      size: PickerMetrics.compactGlyph, selectedScale: 1.1,
-                                     isSelected: index == model.selectedIndex,
+                                     isSelected: model.showsSelection && index == model.selectedIndex,
                                      pulse: model.insertPulse, reduceMotion: model.reduceMotion)
                             .frame(width: PickerMetrics.compactCell, height: PickerMetrics.compactCell)
                             .transition(.opacity)
@@ -48,9 +48,12 @@ private struct CompactCaption: View {
     let theme: PickerTheme
 
     var body: some View {
-        let selected = model.selectedSuggestion
+        let selected = model.showsSelection ? model.selectedSuggestion : nil
         HStack(spacing: 8) {
-            if let selected {
+            if model.isStripUnengaged && selected == nil {
+                RecentsLabel(theme: theme)
+                    .transition(.opacity)
+            } else if let selected {
                 ShortcodeText(code: ShortcodeMatcher.displayShortcode(for: selected.emoji, query: model.query),
                               query: model.query, theme: theme, isSelected: true)
                     .id(selected.id)
@@ -58,14 +61,15 @@ private struct CompactCaption: View {
             }
             Spacer(minLength: 6)
             Group {
-                if model.isRecents {
-                    if model.isSelectionTentative {
-                        HStack(spacing: 4) {
-                            Keycap("←", theme: theme)
-                            Keycap("→", theme: theme)
-                        }
-                        .help("Use the arrow keys to choose; ↩ types a newline until you do")
+                if model.isStripUnengaged {
+                    // ↩ still types a newline until → engages the strip.
+                    HStack(spacing: 6) {
+                        Keycap("→", theme: theme)
+                        Text("choose")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(theme.tertiary)
                     }
+                } else if model.isRecents {
                     RecentsLabel(theme: theme)
                 } else if let probability = selected?.jevProbability {
                     JevMeter(probability: probability, isSelected: true, theme: theme)

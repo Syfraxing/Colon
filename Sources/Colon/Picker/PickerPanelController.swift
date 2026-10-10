@@ -186,8 +186,22 @@ final class PickerPanelController {
         focusSearchField(retries: 3)
     }
 
+    /// Arrow keys. On the unengaged bare-trigger strip the first call engages it and highlights
+    /// index 0 instead of moving.
     func moveSelection(by delta: Int) {
         model.moveSelection(by: delta)
+    }
+
+    /// False only while the bare-trigger strip is up and not yet engaged (no row highlighted;
+    /// Return/Tab/Esc belong to the app). Always true for a real query.
+    var isEngaged: Bool {
+        model.syncIfNeeded()
+        return !model.isStripUnengaged
+    }
+
+    /// Engages the bare-trigger strip and highlights its first emoji. No-op otherwise.
+    func engage() {
+        model.engage()
     }
 
     /// ⌘↩ inserted the highlighted emoji and the picker stays open: a short pop on that emoji

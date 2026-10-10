@@ -134,7 +134,7 @@ struct InlinePickerView: View {
             .padding(PickerMetrics.listInset)
 
             PickerFooter(theme: theme, jevStatus: model.jevStatus, isRefining: model.isRefining,
-                         hint: model.isSelectionTentative ? .choose : .insert)
+                         hint: model.isStripUnengaged ? .choose : .insert, showsJev: !model.isRecents)
                 .frame(height: PickerMetrics.footerHeight)
         }
         .overlay(alignment: .top) {
@@ -153,7 +153,7 @@ struct SuggestionList: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if !model.suggestions.isEmpty {
+            if !model.suggestions.isEmpty && model.showsSelection {
                 SelectionPill(theme: theme, isTentative: model.isSelectionTentative, pulse: model.insertPulse)
                     .frame(height: PickerMetrics.rowHeight)
                     .offset(y: CGFloat(model.selectedIndex) * PickerMetrics.rowHeight)
@@ -163,7 +163,7 @@ struct SuggestionList: View {
                     SuggestionRow(suggestion: suggestion,
                                   glyph: model.displayText(suggestion.emoji),
                                   query: model.query,
-                                  isSelected: index == model.selectedIndex,
+                                  isSelected: model.showsSelection && index == model.selectedIndex,
                                   pulse: model.insertPulse,
                                   reduceMotion: model.reduceMotion,
                                   theme: theme)
@@ -372,6 +372,8 @@ struct PickerFooter: View {
     let jevStatus: JevStatus
     let isRefining: Bool
     var hint: Hint = .insert
+    /// Recents never go to Jev, so the badge would say nothing there.
+    var showsJev = true
 
     var body: some View {
         HStack(spacing: 6) {
@@ -383,10 +385,9 @@ struct PickerFooter: View {
                 Keycap("esc", theme: theme).padding(.leading, 6)
                 Text("close").foregroundStyle(theme.tertiary)
                 Spacer(minLength: 4)
-                JevBadge(status: jevStatus, isRefining: isRefining, theme: theme)
+                if showsJev { JevBadge(status: jevStatus, isRefining: isRefining, theme: theme) }
             case .choose:
-                // Recents: ↩ still types a newline until the user arrows in, so say how to pick.
-                Keycap("↑", theme: theme)
+                // Recents: ↩ still types a newline until ↓ engages the strip, so say how to pick.
                 Keycap("↓", theme: theme)
                 Text("choose").foregroundStyle(theme.tertiary)
                 Spacer(minLength: 4)

@@ -42,8 +42,11 @@ final class PickerModel: ObservableObject {
     @Published private(set) var jevStatus: JevStatus = .idle
     @Published private(set) var selectedIndex = 0
     @Published private(set) var insertPulse: InsertPulse?
-    /// The user moved the highlight with the keyboard for the current query.
-    @Published private(set) var keyboardMovedHighlight = false
+    /// The user moved the highlight with the keyboard for the current query. For the bare-trigger
+    /// strip this is "engaged": only then do Return/Tab insert, so only then is a row highlighted.
+    @Published private(set) var isEngaged = false
+    /// The pointer rests on a row of the unengaged strip (clicking it inserts).
+    @Published private(set) var pointerHighlight = false
 
     // Search mode
     @Published private(set) var searchText = ""
@@ -96,9 +99,14 @@ final class PickerModel: ObservableObject {
     /// The trigger alone: the list holds the user's most-used emoji rather than matches.
     var isRecents: Bool { mode == .inline && query.isEmpty && !suggestions.isEmpty }
 
-    /// Recents before the user arrows into them: Return/Tab/Esc still reach the app, so the
-    /// highlight is drawn as a hint rather than a promise.
-    var isSelectionTentative: Bool { isRecents && !keyboardMovedHighlight }
+    /// Recents before the user engages them with ↓ (list) or → (compact): Return/Tab/Esc still
+    /// reach the app, so no row is highlighted.
+    var isStripUnengaged: Bool { isRecents && !isEngaged }
+
+    /// Whether the selection pill is drawn: always for matches; for the unengaged strip only under
+    /// the pointer, and then faintly (`isSelectionTentative`).
+    var showsSelection: Bool { !isStripUnengaged || pointerHighlight }
+    var isSelectionTentative: Bool { isStripUnengaged }
 
     var showsRecentsHeader: Bool { isRecents && layout == .list }
 
@@ -136,7 +144,8 @@ final class PickerModel: ObservableObject {
 
         if queryChanged {
             userMovedHighlight = false
-            if keyboardMovedHighlight { keyboardMovedHighlight = false }
+            if isEngaged { isEngaged = false }
+            if pointerHighlight { pointerHighlight = false }
         } else if userMovedHighlight {
             incoming = Self.preservingOrder(of: suggestions, updatedWith: incoming)
         }
@@ -191,10 +200,15 @@ final class PickerModel: ObservableObject {
             return
         }
         guard !suggestions.isEmpty, delta != 0 else { return }
+        // The engaging key of the bare-trigger strip highlights the first emoji; it does not move.
+        if isStripUnengaged {
+            engage()
+            return
+        }
         let count = suggestions.count
         let next = ((selectedIndex + delta) % count + count) % count
         userMovedHighlight = true
-        if !keyboardMovedHighlight { keyboardMovedHighlight = true }
+        if !isEngaged { isEngaged = true }
         if next != selectedIndex { onSelectionChanged?() }
         setSelection(next)
         if mode == .search { requestScroll("row/\(suggestions[next].id)") }
@@ -205,9 +219,31 @@ final class PickerModel: ObservableObject {
     func selectRow(_ index: Int) {
         guard suggestions.indices.contains(index) else { return }
         userMovedHighlight = true
+        if isStripUnengaged && !pointerHighlight {
+            // The faint pill appears under the pointer; no slide in from row 0, no haptic.
+            pointerHighlight = true
+            selectedIndex = index
+            return
+        }
         guard index != selectedIndex else { return }
         onSelectionChanged?()
         setSelection(index)
+    }
+
+    /// Engages the bare-trigger strip: highlights index 0 (Return/Tab now insert it).
+    func engage() {
+        syncIfNeeded()
+        guard isStripUnengaged else { return }
+        userMovedHighlight = true
+        isEngaged = true
+        if pointerHighlight {
+            // The faint pill under the pointer slides up to the first emoji.
+            setSelection(0)
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { selectedIndex = 0 }
+        }
     }
 
     /// ⌘↩ inserted the highlighted emoji and the picker stays open: pulse it.
