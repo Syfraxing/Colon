@@ -113,6 +113,9 @@ enum ShellActivation {
         }
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        // macOS 14+ may refuse activation for an app launched in the background (e.g. by a
+        // script or at login); still put the window on top so onboarding is never hidden.
+        window.orderFrontRegardless()
     }
 
     static func windowWillClose(_ window: NSWindow) {
