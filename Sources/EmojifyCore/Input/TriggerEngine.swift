@@ -89,8 +89,13 @@ public struct TriggerEngine: Sendable {
         return trigger.count + query.count + closingProgress
     }
 
-    public mutating func handle(_ input: KeyInput) -> TriggerResult {
+    /// Feeds one keystroke.
+    /// - Parameter pickerVisible: the picker is on screen with a selectable row. Picker keys
+    ///   (↑ ↓ Enter Tab Esc) are swallowed only when this is true and the engine is showing;
+    ///   otherwise they pass through to the app.
+    public mutating func handle(_ input: KeyInput, pickerVisible: Bool) -> TriggerResult {
         let wasShowing = isShowing
+        let ownsPickerKeys = pickerVisible && isShowing
         switch input {
         case .text(let text):
             let characters = Array(text)
@@ -108,7 +113,7 @@ public struct TriggerEngine: Sendable {
             return visibilityResult(wasShowing: wasShowing)
 
         case .up, .down:
-            if isShowing {
+            if ownsPickerKeys {
                 return TriggerResult(.moveSelection(input == .down ? 1 : -1), swallow: true)
             }
             caretMoved()
@@ -119,7 +124,7 @@ public struct TriggerEngine: Sendable {
             return visibilityResult(wasShowing: wasShowing)
 
         case .enter, .tab:
-            if isShowing, let query {
+            if ownsPickerKeys, let query {
                 let count = trigger.count + query.count
                 endTracking(boundary: true)
                 return TriggerResult(.commitSelection(deleteCount: count), swallow: true)
@@ -128,7 +133,7 @@ public struct TriggerEngine: Sendable {
             return visibilityResult(wasShowing: wasShowing)
 
         case .escape:
-            if isShowing {
+            if ownsPickerKeys {
                 // Text stays; the caret now follows a query character.
                 endTracking(boundary: false)
                 return TriggerResult(.hide, swallow: true)

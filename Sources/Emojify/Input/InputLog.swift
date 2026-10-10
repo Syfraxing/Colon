@@ -10,6 +10,6 @@ enum InputLog {
     static func debug(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
         let text = message()
-        logger.debug("\(text, privacy: .public)")
+        logger.debug("\(text, privacy: .private)")
     }
 }

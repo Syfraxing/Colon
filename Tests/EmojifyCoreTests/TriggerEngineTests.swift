@@ -15,7 +15,7 @@ final class TriggerEngineTests: XCTestCase {
     @discardableResult
     private func type(_ text: String, into engine: inout TriggerEngine) -> TriggerResult {
         var last = TriggerResult(.none)
-        for character in text { last = engine.handle(.text(String(character))) }
+        for character in text { last = engine.feed(.text(String(character))) }
         return last
     }
 
@@ -86,7 +86,48 @@ final class TriggerEngineTests: XCTestCase {
         var engine = makeEngine()
         type("plain text", into: &engine)
         for input: KeyInput in [.up, .down, .left, .right, .enter, .tab, .escape, .backspace, .interrupt] {
-            XCTAssertFalse(engine.handle(input).swallow, "\(input)")
+            XCTAssertFalse(engine.feed(input).swallow, "\(input)")
+        }
+    }
+
+    private static let everyKeyInput: [KeyInput] = [
+        .text("a"), .text(":"), .text(" "), .text("😂"), .text("é:"), .backspace,
+        .up, .down, .left, .right, .enter, .tab, .escape, .interrupt,
+    ]
+
+    func testIdleNeverSwallowsAnyKey() {
+        for pickerVisible in [false, true] {
+            for input in Self.everyKeyInput {
+                var engine = makeEngine()
+                type("idle text ", into: &engine)
+                engine.reset()
+                let result = engine.handle(input, pickerVisible: pickerVisible)
+                XCTAssertFalse(result.swallow, "\(input) visible=\(pickerVisible)")
+                if case .commitSelection = result.action { XCTFail("commit while idle: \(input)") }
+                if case .moveSelection = result.action { XCTFail("move while idle: \(input)") }
+            }
+        }
+    }
+
+    func testTrackingWithoutVisiblePickerNeverSwallowsPickerKeys() {
+        for input: KeyInput in [.up, .down, .enter, .tab, .escape] {
+            var engine = makeEngine()
+            type(":jo", into: &engine)
+            XCTAssertTrue(engine.isShowing)
+            // The UI has no row to select (empty list or not yet on screen).
+            let result = engine.handle(input, pickerVisible: false)
+            XCTAssertFalse(result.swallow, "\(input)")
+            XCTAssertEqual(result.action, .hide, "\(input)")
+            XCTAssertNil(engine.query, "\(input)")
+        }
+    }
+
+    func testTrackingBelowMinimumIgnoresStalePickerVisibility() {
+        var engine = makeEngine(minQueryLength: 3)
+        type(":jo", into: &engine)
+        for input: KeyInput in [.up, .down, .enter, .tab, .escape] {
+            var copy = engine
+            XCTAssertFalse(copy.handle(input, pickerVisible: true).swallow, "\(input)")
         }
     }
 
@@ -123,7 +164,7 @@ final class TriggerEngineTests: XCTestCase {
     func testBackspaceEditsQuery() {
         var engine = makeEngine()
         type(":joy", into: &engine)
-        let result = engine.handle(.backspace)
+        let result = engine.feed(.backspace)
         XCTAssertEqual(result, show("jo"))
         XCTAssertFalse(result.swallow)
     }
@@ -131,7 +172,7 @@ final class TriggerEngineTests: XCTestCase {
     func testBackspaceBelowMinimumHides() {
         var engine = makeEngine(minQueryLength: 2)
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.backspace), TriggerResult(.hide))
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.hide))
         XCTAssertEqual(engine.query, "j")
         XCTAssertEqual(type("o", into: &engine), show("jo"))
     }
@@ -139,9 +180,9 @@ final class TriggerEngineTests: XCTestCase {
     func testBackspacePastTriggerStopsTracking() {
         var engine = makeEngine()
         type(":j", into: &engine)
-        XCTAssertEqual(engine.handle(.backspace), TriggerResult(.hide))
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.hide))
         XCTAssertEqual(engine.query, "")
-        XCTAssertEqual(engine.handle(.backspace), TriggerResult(.none))
+        XCTAssertEqual(engine.feed(.backspace), TriggerResult(.none))
         XCTAssertNil(engine.query)
         // Retyping the trigger at the same (boundary) spot starts again.
         type(":jo", into: &engine)
@@ -151,7 +192,7 @@ final class TriggerEngineTests: XCTestCase {
     func testBackspaceOutsideQueryAssumesBoundary() {
         var engine = makeEngine()
         type("ab", into: &engine)
-        _ = engine.handle(.backspace)
+        _ = engine.feed(.backspace)
         type(":jo", into: &engine)
         XCTAssertEqual(engine.query, "jo")
     }
@@ -161,8 +202,8 @@ final class TriggerEngineTests: XCTestCase {
     func testArrowsMoveSelectionOnlyWhileShowing() {
         var engine = makeEngine()
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.down), TriggerResult(.moveSelection(1), swallow: true))
-        XCTAssertEqual(engine.handle(.up), TriggerResult(.moveSelection(-1), swallow: true))
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.moveSelection(1), swallow: true))
+        XCTAssertEqual(engine.feed(.up), TriggerResult(.moveSelection(-1), swallow: true))
         XCTAssertTrue(engine.isShowing)
         XCTAssertEqual(engine.query, "jo")
     }
@@ -170,7 +211,7 @@ final class TriggerEngineTests: XCTestCase {
     func testArrowsWhileTrackingBelowMinimumStopTracking() {
         var engine = makeEngine(minQueryLength: 3)
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.down), TriggerResult(.none))
+        XCTAssertEqual(engine.feed(.down), TriggerResult(.none))
         XCTAssertNil(engine.query)
     }
 
@@ -178,7 +219,7 @@ final class TriggerEngineTests: XCTestCase {
         for key: KeyInput in [.left, .right] {
             var engine = makeEngine()
             type(":jo", into: &engine)
-            XCTAssertEqual(engine.handle(key), TriggerResult(.hide))
+            XCTAssertEqual(engine.feed(key), TriggerResult(.hide))
             XCTAssertNil(engine.query)
             XCTAssertFalse(engine.isShowing)
         }
@@ -187,7 +228,7 @@ final class TriggerEngineTests: XCTestCase {
     func testEscapeHidesSwallowsAndKeepsText() {
         var engine = makeEngine()
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.escape), TriggerResult(.hide, swallow: true))
+        XCTAssertEqual(engine.feed(.escape), TriggerResult(.hide, swallow: true))
         XCTAssertNil(engine.query)
         // The caret follows "jo": a trigger now is not at a boundary.
         type(":x", into: &engine)
@@ -197,14 +238,14 @@ final class TriggerEngineTests: XCTestCase {
     func testEscapeNotShowingPassesThrough() {
         var engine = makeEngine(minQueryLength: 3)
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.escape), TriggerResult(.none))
+        XCTAssertEqual(engine.feed(.escape), TriggerResult(.none))
         XCTAssertNil(engine.query)
     }
 
     func testEnterCommitsSelection() {
         var engine = makeEngine()
         type(":haha", into: &engine)
-        XCTAssertEqual(engine.handle(.enter), TriggerResult(.commitSelection(deleteCount: 5), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 5), swallow: true))
         XCTAssertNil(engine.query)
         XCTAssertFalse(engine.isShowing)
         // After an insertion the next trigger works immediately.
@@ -215,13 +256,13 @@ final class TriggerEngineTests: XCTestCase {
     func testTabCommitsSelection() {
         var engine = makeEngine()
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.tab), TriggerResult(.commitSelection(deleteCount: 3), swallow: true))
+        XCTAssertEqual(engine.feed(.tab), TriggerResult(.commitSelection(deleteCount: 3), swallow: true))
     }
 
     func testEnterNotShowingPassesThroughAndIsBoundary() {
         var engine = makeEngine(minQueryLength: 3)
         type(":jo", into: &engine)
-        XCTAssertEqual(engine.handle(.enter), TriggerResult(.none))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.none))
         XCTAssertNil(engine.query)
         type(":jo", into: &engine)
         XCTAssertEqual(engine.query, "jo")
@@ -268,7 +309,7 @@ final class TriggerEngineTests: XCTestCase {
     func testInterruptResetsSilently() {
         var engine = makeEngine()
         type(":jo", into: &engine)
-        let result = engine.handle(.interrupt)
+        let result = engine.feed(.interrupt)
         XCTAssertEqual(result, TriggerResult(.hide))
         XCTAssertFalse(result.swallow)
         XCTAssertNil(engine.query)
@@ -280,14 +321,14 @@ final class TriggerEngineTests: XCTestCase {
     func testInterruptWhileNotShowingIsSilent() {
         var engine = makeEngine(minQueryLength: 3)
         type(":j", into: &engine)
-        XCTAssertEqual(engine.handle(.interrupt), TriggerResult(.none))
+        XCTAssertEqual(engine.feed(.interrupt), TriggerResult(.none))
         XCTAssertNil(engine.query)
     }
 
     func testInterruptRestoresBoundaryAfterWord() {
         var engine = makeEngine()
         type("word", into: &engine)
-        _ = engine.handle(.interrupt)
+        _ = engine.feed(.interrupt)
         type(":jo", into: &engine)
         XCTAssertEqual(engine.query, "jo")
     }
@@ -310,14 +351,14 @@ final class TriggerEngineTests: XCTestCase {
 
     func testMultiCharacterTextEvent() {
         var engine = makeEngine()
-        XCTAssertEqual(engine.handle(.text(" :jo")), show("jo"))
-        XCTAssertEqual(engine.handle(.text("y ")), TriggerResult(.hide))
+        XCTAssertEqual(engine.feed(.text(" :jo")), show("jo"))
+        XCTAssertEqual(engine.feed(.text("y ")), TriggerResult(.hide))
     }
 
     func testComposedLetterExtendsQuery() {
         var engine = makeEngine()
         type(":caf", into: &engine)
-        XCTAssertEqual(engine.handle(.text("é")), show("café"))
+        XCTAssertEqual(engine.feed(.text("é")), show("café"))
     }
 
     // MARK: Multi-character triggers
@@ -329,7 +370,7 @@ final class TriggerEngineTests: XCTestCase {
         XCTAssertEqual(type(":", into: &engine), TriggerResult(.none))
         XCTAssertEqual(engine.query, "")
         XCTAssertEqual(type("jo", into: &engine), show("jo"))
-        XCTAssertEqual(engine.handle(.enter), TriggerResult(.commitSelection(deleteCount: 4), swallow: true))
+        XCTAssertEqual(engine.feed(.enter), TriggerResult(.commitSelection(deleteCount: 4), swallow: true))
     }
 
     func testDoubleColonTriggerSingleColonDoesNotTrigger() {
@@ -363,9 +404,9 @@ final class TriggerEngineTests: XCTestCase {
     func testBackspaceIntoMultiCharTrigger() {
         var engine = makeEngine(trigger: "::")
         type("::j", into: &engine)
-        _ = engine.handle(.backspace)   // removes "j"
+        _ = engine.feed(.backspace)   // removes "j"
         XCTAssertEqual(engine.query, "")
-        _ = engine.handle(.backspace)   // removes second ":", leaving a partial trigger
+        _ = engine.feed(.backspace)   // removes second ":", leaving a partial trigger
         XCTAssertNil(engine.query)
         type(":jo", into: &engine)  // completes "::" again
         XCTAssertEqual(engine.query, "jo")
@@ -437,7 +478,7 @@ final class TriggerEngineTests: XCTestCase {
     func testMultiCharClosingTriggerBackspaceReturnsToQuery() {
         var engine = makeEngine(trigger: "::")
         type("::joy:", into: &engine)
-        XCTAssertEqual(engine.handle(.backspace), show("joy"))
+        XCTAssertEqual(engine.feed(.backspace), show("joy"))
     }
 
     func testMultiCharClosingTriggerAbandoned() {
@@ -450,9 +491,16 @@ final class TriggerEngineTests: XCTestCase {
     func testClosingTriggerIgnoredInsideComposedMultiCharEvent() {
         var engine = makeEngine()
         type(":joy", into: &engine)
-        let result = engine.handle(.text(":a"))
+        let result = engine.feed(.text(":a"))
         XCTAssertFalse(result.swallow)
         XCTAssertNil(engine.query)
+    }
+}
+
+private extension TriggerEngine {
+    /// Feeds a key with the picker visible exactly when the engine wants it shown (the UI kept up).
+    mutating func feed(_ input: KeyInput) -> TriggerResult {
+        handle(input, pickerVisible: isShowing)
     }
 }
 

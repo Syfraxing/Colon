@@ -14,6 +14,21 @@ protocol InputControllerDelegate: AnyObject {
     func inputCommitSelection() -> String?
     /// Return the emoji string for an exact shortcode (closing-trigger auto replace), nil if unknown.
     func inputCommit(shortcode: String) -> String?
+    /// Whether a Cocoa screen point lies inside the picker (a click there is a pick, not an interrupt).
+    func inputIsPointInPicker(_ point: CGPoint) -> Bool
+    /// The picker is on screen with a selectable row (`picker.isVisible && picker.selectedSuggestion != nil`).
+    /// Picker keys are swallowed only while this is true.
+    func inputPickerIsVisible() -> Bool
+}
+
+extension InputControllerDelegate {
+    /// Fallback until the coordinator asks the picker: any visible panel of ours.
+    func inputIsPointInPicker(_ point: CGPoint) -> Bool {
+        NSApp.windows.contains { $0 is NSPanel && $0.isVisible && $0.frame.contains(point) }
+    }
+
+    /// Fallback: trust that the picker is up whenever the input layer has shown it.
+    func inputPickerIsVisible() -> Bool { true }
 }
 
 /// Owns the CGEventTap, runs `TriggerEngine`, honours exclusions/secure input,
@@ -27,14 +42,17 @@ protocol InputControllerDelegate: AnyObject {
 /// callback does no cross-process work (Accessibility reads run on `axQueue` after it returns),
 /// so it stays well under a millisecond and a busy target app cannot stall the tap.
 @MainActor
-final class InputController {
+final class InputController: ObservableObject {
     weak var delegate: InputControllerDelegate?
     private let settings: AppSettings
+
+    /// Health of the pipeline for the menu bar; refreshed on changes and by the ~2 s health poll.
+    @Published private(set) var status: InputStatus = .noPermission
 
     init(settings: AppSettings) {
         self.settings = settings
         engine = TriggerEngine(
-            trigger: settings.triggerString,
+            trigger: AppSettings.isValidTrigger(settings.triggerString) ? settings.triggerString : ":",
             minQueryLength: settings.minQueryLength,
             autoReplaceOnClosingTrigger: settings.autoReplaceOnClosingTrigger,
             shortcodeExists: { EmojiStore.shared.emoji(forShortcode: $0) != nil }
@@ -76,7 +94,7 @@ final class InputController {
     private static let probeRetryDelays: [TimeInterval] = [0.15, 0.4]
     /// A capture with no keystroke for this long is abandoned.
     private static let idleTimeout: TimeInterval = 10
-    private static let healthInterval: TimeInterval = 3
+    private static let healthInterval: TimeInterval = 2
 
     // MARK: Lifecycle
 
@@ -86,6 +104,8 @@ final class InputController {
         wantsRunning = true
         startObserving()
         startHealthTimer()
+        defer { refreshStatus() }
+        guard settings.isEnabled else { return AXIsProcessTrusted() }
         return installTap()
     }
 
@@ -101,6 +121,7 @@ final class InputController {
         observers.removeAll()
         cancellables.removeAll()
         resetCapture()
+        refreshStatus()
     }
 
     /// The UI dismissed the picker (click outside, Esc in panel). Reset tracking.
@@ -172,8 +193,8 @@ final class InputController {
     }
 
     /// A non-nil tap is not necessarily a healthy one: re-enable it if the system disabled it,
-    /// reinstall it if it will not come back, tear it down if trust was revoked, and install it
-    /// as soon as trust is granted.
+    /// reinstall it if it will not come back, tear it down if trust was revoked or Emojify was
+    /// turned off, and install it as soon as trust is granted.
     private func startHealthTimer() {
         guard healthTimer == nil else { return }
         let timer = Timer(timeInterval: Self.healthInterval, repeats: true) { [weak self] _ in
@@ -185,7 +206,16 @@ final class InputController {
     }
 
     private func checkHealth() {
+        defer { refreshStatus() }
         guard wantsRunning else { return }
+        guard settings.isEnabled else {
+            if tap != nil {
+                InputLog.debug("disabled, removing tap")
+                resetCapture()
+                removeTap()
+            }
+            return
+        }
         guard AXIsProcessTrusted() else {
             if tap != nil {
                 InputLog.debug("accessibility revoked, removing tap")
@@ -209,6 +239,20 @@ final class InputController {
         }
     }
 
+    private func refreshStatus() {
+        let current: InputStatus
+        if !settings.isEnabled {
+            current = .disabled
+        } else if tap == nil || !AXIsProcessTrusted() {
+            current = .noPermission
+        } else if IsSecureEventInputEnabled() {
+            current = .secureInput
+        } else {
+            current = .running
+        }
+        if status != current { status = current }
+    }
+
     // MARK: Callback
 
     private func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -221,7 +265,9 @@ final class InputController {
             return pass
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             // Clicks on our own panel are picks, handled by the picker; anything else moves focus/caret.
-            if !isOwnWindow(at: event.location) { resetCapture() }
+            let point = AXGeometry.cocoaPoint(fromQuartz: event.location,
+                                              primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
+            if !(delegate?.inputIsPointInPicker(point) ?? false) { resetCapture() }
             return pass
         case .keyDown:
             break
@@ -239,14 +285,10 @@ final class InputController {
         }
         guard let input = translate(event) else { return pass }
 
-        // The engine believes the picker is up but our probe has not shown it yet: never swallow
-        // navigation keys for an invisible picker.
-        if engine.isShowing, !pickerVisible, input.isPickerKey {
-            resetCapture()
-            return pass
-        }
-
-        let result = engine.handle(input)
+        // Picker keys belong to the picker only while it is on screen with a row to pick: we have
+        // shown it (the focus probe may still be running) and the UI confirms a selection.
+        let visible = pickerVisible && (delegate?.inputPickerIsVisible() ?? false)
+        let result = engine.handle(input, pickerVisible: visible)
         switch result.action {
         case .none:
             break
@@ -258,44 +300,58 @@ final class InputController {
         case .moveSelection(let delta):
             delegate?.inputMoveSelection(by: delta)
         case .commitSelection(let deleteCount):
-            return commitSelection(deleteCount: deleteCount, proxy: proxy) ? nil : pass
+            commitSelection(deleteCount: deleteCount, key: event, proxy: proxy)
+            return nil
         case .commitShortcode(let shortcode, let deleteCount):
-            return commit(shortcode: shortcode, deleteCount: deleteCount, proxy: proxy) ? nil : pass
+            commit(shortcode: shortcode, deleteCount: deleteCount, key: event, proxy: proxy)
+            return nil
         }
         if engine.isTracking { scheduleIdleTimeout() } else { cancelIdleTimeout() }
         return result.swallow ? nil : pass
     }
 
-    /// Returns true if the Enter/Tab was consumed. With no row to insert it passes through untouched.
-    private func commitSelection(deleteCount: Int, proxy: CGEventTapProxy) -> Bool {
-        let wasVisible = pickerVisible
+    /// Enter/Tab was swallowed: insert the selection, or re-post the key if there is none.
+    private func commitSelection(deleteCount: Int, key: CGEvent, proxy: CGEventTapProxy) {
         // The delegate closes the picker itself when asked to commit.
-        let text = wasVisible ? delegate?.inputCommitSelection() : nil
+        let text = delegate?.inputCommitSelection()
         endCapture(notifyDelegate: false)
         guard let text else {
-            InputLog.debug("commit with no selection, key passes through")
-            return false
+            InputLog.debug("commit with no selection, re-posting key")
+            repost(key, proxy: proxy)
+            return
         }
         InputLog.debug("commit selection, deleteCount \(deleteCount)")
         Inserter.replace(deleteCount: deleteCount, with: text, method: settings.insertionMethod, poster: .tap(proxy))
-        return true
     }
 
-    /// Returns true if the closing trigger was consumed. Unknown shortcodes keep `:xyz:` literal.
-    private func commit(shortcode: String, deleteCount: Int, proxy: CGEventTapProxy) -> Bool {
+    /// The closing trigger was swallowed: insert the shortcode's emoji, or re-post the trigger
+    /// character so `:xyz:` stays literal.
+    private func commit(shortcode: String, deleteCount: Int, key: CGEvent, proxy: CGEventTapProxy) {
         let text = delegate?.inputCommit(shortcode: shortcode)
         endCapture(notifyDelegate: false)
-        guard let text else { return false }
+        guard let text else {
+            InputLog.debug("unknown shortcode, re-posting closing trigger")
+            repost(key, proxy: proxy)
+            return
+        }
         InputLog.debug("commit shortcode :\(shortcode):, deleteCount \(deleteCount)")
         Inserter.replace(deleteCount: deleteCount, with: text, method: settings.insertionMethod, poster: .tap(proxy))
-        return true
+    }
+
+    /// Delivers a swallowed key after all, marked so our tap lets it through untouched. Posted at
+    /// the tap, so it keeps its place ahead of later keystrokes.
+    private func repost(_ key: CGEvent, proxy: CGEventTapProxy) {
+        guard let copy = key.copy() else { return }
+        copy.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
+        copy.tapPostEvent(proxy)
     }
 
     /// Why we must stay out of the way right now, or nil when active. Cheap and in-process only.
     private func silenceReason() -> String? {
         if !settings.isEnabled { return "disabled" }
         if IsSecureEventInputEnabled() { return "secure input" }
-        if frontmostApp?.processIdentifier == ProcessInfo.processInfo.processIdentifier { return "Emojify frontmost" }
+        // Our own Settings window or the search panel has the keyboard.
+        if NSApp.isActive || NSApp.keyWindow != nil { return "Emojify has focus" }
         if settings.isExcluded(bundleID: frontmostApp?.bundleIdentifier) { return "excluded app" }
         if !isKeyboardLayoutInput { return "input method active" }
         return nil
@@ -335,13 +391,6 @@ final class InputController {
             return .interrupt
         }
         return .text(text)
-    }
-
-    private func isOwnWindow(at quartzPoint: CGPoint) -> Bool {
-        let point = AXGeometry.cocoaPoint(fromQuartz: quartzPoint,
-                                          primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
-        // Our floating panels (the picker); the menu bar item and settings window do not count.
-        return NSApp.windows.contains { $0 is NSPanel && $0.isVisible && $0.frame.contains(point) }
     }
 
     // MARK: Picker presentation
@@ -496,11 +545,12 @@ final class InputController {
                 self?.configureEngine(trigger: trigger, minQueryLength: minLength, autoReplace: autoReplace)
             }
             .store(in: &cancellables)
+        // Delivered after the property is set, so `checkHealth` sees the new value and tears the
+        // tap down (disabled) or installs it (enabled) right away.
         settings.$isEnabled
             .removeDuplicates()
-            .sink { [weak self] enabled in
-                if !enabled { self?.resetCapture() }
-            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.checkHealth() }
             .store(in: &cancellables)
         settings.$excludedBundleIDs
             .sink { [weak self] excluded in
@@ -512,8 +562,8 @@ final class InputController {
     }
 
     private func configureEngine(trigger: String, minQueryLength: Int, autoReplace: Bool) {
-        let trigger = trigger.isEmpty ? ":" : trigger
-        let minQueryLength = max(0, minQueryLength)
+        let trigger = AppSettings.isValidTrigger(trigger) ? trigger : ":"
+        let minQueryLength = max(1, minQueryLength)
         guard trigger != engine.trigger || minQueryLength != engine.minQueryLength
                 || autoReplace != engine.autoReplaceOnClosingTrigger else { return }
         resetCapture()
@@ -532,12 +582,3 @@ final class InputController {
     }
 }
 
-private extension KeyInput {
-    /// Keys the engine swallows while the picker is visible.
-    var isPickerKey: Bool {
-        switch self {
-        case .up, .down, .enter, .tab, .escape: true
-        default: false
-        }
-    }
-}
