@@ -44,9 +44,13 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
   instantly.
 - **Hotkey search.** Press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>⌘</kbd><kbd>E</kbd> (customizable)
   to search all emoji from anywhere, then click or press Enter to insert.
-- **Custom trigger.** Prefer `;` or `::`? Change it in Settings.
-- **Excluded apps.** Silent in apps that already have their own picker (Slack, Discord,
-  Teams, Linear, Notion, GitHub Desktop out of the box) and in any app you add.
+- **Custom trigger.** Prefer `;` or `::`? Any one to three punctuation characters work;
+  change it in Settings → General.
+- **Excluded apps.** Out of the box Emojify stays silent in apps that have their own
+  picker (Slack, Discord, Teams, Linear, Notion, GitHub Desktop), in terminals and code
+  editors where `:` means something else (Terminal, iTerm2, Ghostty, Warp, VS Code, Xcode,
+  Zed, Cursor), and in password managers (1Password, Bitwarden, Passwords, Keychain
+  Access). Add or remove apps in Settings → Excluded Apps.
 - **Skin tones** applied automatically wherever an emoji supports them.
 - **Frecency.** Emoji you use often and recently float to the top.
 - **Private by design.** Never active in password fields, never keeps a log of your
@@ -67,24 +71,35 @@ reranked by [Jev](https://typesafe.ai), TypeSafe AI's fast decision model.
 1. Download `Emojify-<version>.dmg` (or the `.zip`) from the
    [latest release](https://github.com/Syfraxing/Emojify/releases/latest).
 2. Open it and drag **Emojify** into **Applications**.
-3. **First launch.** Release builds are not notarized by Apple yet, so Gatekeeper will say
-   it "cannot verify" the app. Either:
-   - right-click (or Control-click) Emojify in Applications, choose **Open**, then
-     **Open** again, or
-   - remove the quarantine flag in Terminal:
+3. **First launch.** Release builds are not notarized by Apple yet, so Gatekeeper refuses
+   to open the app the first time. Pick one:
+   - **macOS 15 Sequoia and later:** open Emojify, click **Done** on the warning, then go to
+     **System Settings → Privacy & Security**, scroll down to *"Emojify" was blocked* and
+     click **Open Anyway**.
+   - **macOS 14 Sonoma:** right-click (or Control-click) Emojify in Applications, choose
+     **Open**, then **Open** again.
+   - **Any version:** remove the quarantine flag in Terminal:
      ```sh
      xattr -dr com.apple.quarantine /Applications/Emojify.app
      ```
 4. **Grant Accessibility.** Emojify needs it to see your keystrokes and type the emoji.
    The onboarding window takes you to **System Settings → Privacy & Security →
-   Accessibility**; switch Emojify on and it starts working immediately.
+   Accessibility**; switch Emojify on and it starts working immediately. Install the app in
+   Applications *before* granting, and don't move it afterwards.
 
 Emojify lives in the menu bar (there's no Dock icon). Click the menu bar icon for
 Settings, the on/off toggle and Quit. Turn on **Launch at login** in Settings → General.
 
-> **Updating:** after replacing the app with a new release you may need to toggle
-> Emojify off and on again in the Accessibility list, because macOS ties that permission
-> to the app's signature.
+> **Updating or stuck?** macOS ties the Accessibility permission to the app's signature,
+> and release builds are ad-hoc signed, so after installing a new release Emojify may show
+> "Accessibility permission needed" even though the switch looks on. Remove Emojify from
+> the Accessibility list (−) and add it again, or reset the permission in Terminal and
+> grant it once more:
+> ```sh
+> tccutil reset Accessibility so.slayer.Emojify
+> ```
+> If Emojify goes quiet everywhere, check the menu bar: *Paused — secure input* means
+> another app (often a password prompt or a terminal) has turned on macOS Secure Input.
 
 ## Jev ranking (bring your own key)
 
@@ -95,7 +110,8 @@ Emojify works fully offline with local search. For semantic ranking, add a Jev k
 
 The key is stored in your macOS **Keychain** and is only ever sent to
 `api.typesafe.ai`. It is never written to disk in plain text, logged or synced anywhere
-else. For development you can instead set the `JEV_API_KEY` environment variable.
+else. Debug builds (`swift run`) also accept a `JEV_API_KEY` environment variable for
+development; release builds read the Keychain only.
 
 ## Privacy
 
@@ -105,21 +121,24 @@ with it.
 **On your Mac**
 - Emojify watches keystrokes only to spot the trigger. Outside an active `:query` it
   keeps nothing: no buffer, no history, no log of what you type.
-- It is silent in secure text fields (passwords), whenever macOS Secure Input is on, in
-  excluded apps, and in its own Settings window.
+- It is silent in secure text fields (passwords), whenever macOS Secure Input is on, while
+  an input method (Japanese, Chinese, Korean…) is active, in excluded apps (password
+  managers and terminals by default), and in its own windows.
 - Settings and emoji usage counts (for frecency) are stored locally in Emojify's
   preferences. Your Jev key is stored in the Keychain.
 
-**Sent to Jev** (only when a key is set and **Use Jev** is on), over HTTPS to
-`api.typesafe.ai`:
+**Sent to Jev** only when a key is set, **Use Jev** is on, and your query is at least two
+characters long. Requests go over HTTPS to `api.typesafe.ai` with no cookies or cache, and
+contain:
 - the query you typed after the trigger (e.g. `haha`);
-- the name and bundle ID of the app you're typing in (e.g. `Mail`, `com.apple.mail`);
 - the candidate emoji being ranked (emoji, name, keywords);
-- *if* **Send text context** is on: up to 300 characters of the text right before the
-  trigger, read from the focused field at that moment so suggestions fit the sentence.
-  Never read from password fields. Turn it off in Settings → Jev to send only the query.
+- the name and bundle ID of the app you're typing in (e.g. `Mail`, `com.apple.mail`);
+- **only if you opt in** to **Send text context** (off by default, Settings → Jev): up to
+  300 characters of the text right before the trigger, read from the focused field at that
+  moment so suggestions fit the sentence. Never read from password fields.
 
-Nothing is sent when Jev is off or no key is set. Emojify has no analytics or telemetry.
+Nothing is sent when Jev is off or no key is set. Emojify has no analytics or telemetry,
+and it never logs your keys, queries or typed text.
 
 ## Build from source
 
@@ -143,11 +162,13 @@ make install          # build, sign, copy to /Applications, launch
 | `make clean` | Remove `.build`, `build`, `dist`. |
 
 **Code signing.** `scripts/build-app.sh` signs with the `SIGN_IDENTITY` environment
-variable if set; otherwise it uses your first *Developer ID Application* or *Apple
-Development* certificate, and falls back to ad-hoc signing. Use a certificate if you can:
-macOS ties the Accessibility permission to the signature, and an ad-hoc signature changes
-on every build, so you'd have to remove and re-add Emojify in the Accessibility list after
-each rebuild. Developer ID builds also get the hardened runtime.
+variable if set; otherwise it uses your first *Developer ID Application* certificate, then
+*Apple Development*, then any other valid code-signing identity in your keychain (a
+self-signed certificate works), and falls back to ad-hoc signing. Use a certificate if you
+can: macOS ties the Accessibility permission to the signature's designated requirement,
+and an ad-hoc signature changes on every build, so you'd have to re-grant Accessibility
+(`tccutil reset Accessibility so.slayer.Emojify`) after each rebuild. Developer ID builds
+also get the hardened runtime and a secure timestamp.
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" make dmg
@@ -157,7 +178,8 @@ EMOJIFY_VERSION=1.2.0 make app    # override the version string
 
 **Releases.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which tests,
 builds an ad-hoc signed universal app, and attaches the `.zip`, `.dmg` and
-`SHA256SUMS.txt` to a GitHub Release.
+`SHA256SUMS.txt` to a GitHub Release. CI also scans every commit for anything that looks
+like an API key or token.
 
 ## How it works
 

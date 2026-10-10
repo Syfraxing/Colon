@@ -11,6 +11,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets-scan:
+    name: Secrets scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Fails if anything that looks like an API key or token is in any commit.
+      # Jev keys belong in the Keychain (or a local JEV_API_KEY env var), never in git.
+      - name: Scan all commits for secrets
+        run: |
+          patterns=(
+            'apikey_[A-Za-z0-9]{12,}'
+            'Bearer [A-Za-z0-9._~+/=-]{20,}'
+            'JEV_API_KEY[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9._-]{12,}'
+            'sk-[A-Za-z0-9_-]{20,}'
+            'gh[pousr]_[A-Za-z0-9]{36}'
+            'AKIA[0-9A-Z]{16}'
+            '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          )
+          args=()
+          for p in "${patterns[@]}"; do args+=(-e "$p"); done
+          if git grep -nIE "${args[@]}" $(git rev-list --all) -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::Possible secret committed (see matches above). Rotate it and purge it from history."
+            exit 1
+          fi
+          echo "No secrets found in $(git rev-list --all | wc -l) commits"
+
   build-and-test:
     name: Build & test
     runs-on: macos-latest

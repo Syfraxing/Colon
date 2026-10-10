@@ -9,7 +9,9 @@
 # Environment:
 #   SIGN_IDENTITY     Code signing identity (name or SHA-1). Defaults to the first
 #                     "Developer ID Application" identity, then the first
-#                     "Apple Development" identity in your keychain, else ad-hoc ("-").
+#                     "Apple Development" identity, then any other valid
+#                     code-signing identity (e.g. a self-signed "Emojify Dev"
+#                     certificate) in your keychain, else ad-hoc ("-").
 #                     Set SIGN_IDENTITY=- to force ad-hoc signing.
 #   EMOJIFY_VERSION   Overrides CFBundleShortVersionString (a leading "v" is stripped).
 #   EMOJIFY_BUILD     Overrides CFBundleVersion.
@@ -37,7 +39,7 @@ APP_NAME="Emojify"
 APP="$BUILD_DIR/$APP_NAME.app"
 NATIVE=0
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 for arg in "$@"; do
     case "$arg" in
@@ -138,8 +140,8 @@ xattr -cr "$APP"
 if [[ -z "${SIGN_IDENTITY+set}" ]]; then
     identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
     SIGN_IDENTITY="-"
-    for kind in "Developer ID Application" "Apple Development"; do
-        line="$(grep -m1 "\"$kind: " <<<"$identities" || true)"
+    for pattern in '"Developer ID Application: ' '"Apple Development: ' '^ *[0-9]+\) [0-9A-F]{40} "'; do
+        line="$(grep -m1 -E "$pattern" <<<"$identities" || true)"
         if [[ -n "$line" ]]; then
             SIGN_IDENTITY="$(awk '{print $2}' <<<"$line")"
             SIGN_LABEL="$(sed -E 's/.*"(.*)".*/\1/' <<<"$line")"
