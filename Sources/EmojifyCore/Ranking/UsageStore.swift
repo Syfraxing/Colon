@@ -3,8 +3,9 @@ import Foundation
 /// Frecency of picked emoji, persisted in Application Support. OWNER: core worker.
 ///
 /// Every pick adds 1 to a score that halves every `halfLife`, so the score blends how often and how
-/// recently an emoji was used. Scores are also kept per query (`haha` -> 😂) so a habit for one
-/// shortcut doesn't leak into every other search. Thread-safe; disk writes are debounced and async.
+/// recently an emoji was used. Only emoji ids, scores, counts and timestamps are written to disk.
+/// Per-query habits (`haha` -> 😂) are kept in memory for the app session only (bounded LRU), so
+/// typed queries never reach disk. Thread-safe; disk writes are debounced and async.
 public final class UsageStore: @unchecked Sendable {
     public static let shared = UsageStore()
 
@@ -30,6 +31,8 @@ public final class UsageStore: @unchecked Sendable {
 
     // Guarded by `lock`.
     private var state: UsageFile
+    /// Session-only query -> emoji picks. Never persisted.
+    private var queries = LRUCache<String, [String: UsageEntry]>(capacity: UsageStore.maxQueryEntries)
     private var generation = 0
     private var writtenGeneration = 0
 
@@ -46,7 +49,13 @@ public final class UsageStore: @unchecked Sendable {
         self.halfLife = halfLife
         self.writeDelay = writeDelay
         self.now = now
-        state = Self.load(from: self.fileURL)
+        let (file, needsRewrite) = Self.load(from: self.fileURL)
+        state = file
+        if needsRewrite {
+            // Older files stored typed queries; rewrite without them right away.
+            generation = 1
+            ioQueue.async { [weak self] in self?.write(ifGeneration: nil) }
+        }
     }
 
     public func recordUse(of emojiID: String) {
@@ -59,21 +68,15 @@ public final class UsageStore: @unchecked Sendable {
         lock.lock()
         state.emoji[emojiID] = bumped(state.emoji[emojiID], at: time)
         if let key = Self.queryKey(query) {
-            var picks = state.queries[key] ?? [:]
+            var picks = queries[key] ?? [:]
             picks[emojiID] = bumped(picks[emojiID], at: time)
             if picks.count > Self.maxEmojiPerQuery {
                 picks = Self.pruned(picks, keeping: Self.maxEmojiPerQuery, at: time, halfLife: halfLife)
             }
-            state.queries[key] = picks
+            queries[key] = picks
         }
         if state.emoji.count > Self.maxEmojiEntries {
             state.emoji = Self.pruned(state.emoji, keeping: Self.maxEmojiEntries, at: time, halfLife: halfLife)
-        }
-        if state.queries.count > Self.maxQueryEntries {
-            let ranked = state.queries.map { key, picks in
-                (key, picks.values.map { $0.value(at: time, halfLife: halfLife) }.reduce(0, +))
-            }.sorted { $0.1 > $1.1 }
-            state.queries = Dictionary(uniqueKeysWithValues: ranked.prefix(Self.maxQueryEntries).map { ($0.0, state.queries[$0.0]!) })
         }
         generation += 1
         let scheduled = generation
@@ -98,7 +101,7 @@ public final class UsageStore: @unchecked Sendable {
         let time = now().timeIntervalSince1970
         lock.lock()
         defer { lock.unlock() }
-        return Self.normalized(state.queries[key]?[emojiID]?.value(at: time, halfLife: halfLife) ?? 0)
+        return Self.normalized(queries[key]?[emojiID]?.value(at: time, halfLife: halfLife) ?? 0)
     }
 
     /// Most frecent emoji ids, best first.
@@ -120,7 +123,7 @@ public final class UsageStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let global = state.emoji.mapValues { Self.normalized($0.value(at: time, halfLife: halfLife)) }
-        let picks = Self.queryKey(query).flatMap { state.queries[$0] } ?? [:]
+        let picks = Self.queryKey(query).flatMap { queries[$0] } ?? [:]
         return Snapshot(frecency: global,
                         affinity: picks.mapValues { Self.normalized($0.value(at: time, halfLife: halfLife)) })
     }
@@ -150,6 +153,7 @@ public final class UsageStore: @unchecked Sendable {
     public func removeAll() {
         lock.lock()
         state = UsageFile()
+        queries.removeAll()
         generation += 1
         lock.unlock()
         flush()
@@ -189,10 +193,12 @@ public final class UsageStore: @unchecked Sendable {
         }
     }
 
-    private static func load(from url: URL) -> UsageFile {
+    /// The persisted file, plus whether it carries legacy fields (typed queries) that must be dropped.
+    private static func load(from url: URL) -> (UsageFile, needsRewrite: Bool) {
         guard let data = try? Data(contentsOf: url),
-              let file = try? JSONDecoder().decode(UsageFile.self, from: data) else { return UsageFile() }
-        return file
+              let file = try? JSONDecoder().decode(UsageFile.self, from: data) else { return (UsageFile(), false) }
+        let legacy = (try? JSONDecoder().decode(LegacyFields.self, from: data))?.queries != nil
+        return (file, legacy || file.version < UsageFile.currentVersion)
     }
 
     private static func queryKey(_ query: String?) -> String? {
@@ -215,10 +221,17 @@ public final class UsageStore: @unchecked Sendable {
     }
 }
 
+/// On-disk format: emoji ids with decayed scores, counts and timestamps only.
 private struct UsageFile: Codable {
-    var version = 1
+    static let currentVersion = 2
+
+    var version = UsageFile.currentVersion
     var emoji: [String: UsageEntry] = [:]
-    var queries: [String: [String: UsageEntry]] = [:]
+}
+
+/// Version 1 files also stored `queries` (typed text); detected only to drop them.
+private struct LegacyFields: Decodable {
+    let queries: [String: [String: UsageEntry]]?
 }
 
 private struct UsageEntry: Codable {
