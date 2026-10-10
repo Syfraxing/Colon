@@ -5,7 +5,8 @@ import Foundation
 /// to Jev, never logged.
 public struct Snippet: Hashable, Codable, Sendable, Identifiable {
     public let id: UUID
-    /// Typed after the trigger string, without it (`sig`, not `:sig`). Matched case-insensitively.
+    /// Typed after the trigger string, without it (`sig`, not `:sig`). Matched case- and
+    /// accent-insensitively (`normalizedTrigger`).
     public var trigger: String
     /// Inserted verbatim; may span several lines.
     public var text: String
@@ -23,7 +24,7 @@ public struct Snippet: Hashable, Codable, Sendable, Identifiable {
         /// A character the input layer would not treat as part of a query (only letters, digits, `_`, `+`, `-`).
         case invalidCharacter(Character)
         case tooLong
-        /// Another snippet already uses this trigger (ignoring case).
+        /// Another snippet already uses this trigger (ignoring case and accents).
         case duplicate
 
         public var message: String {
@@ -40,9 +41,10 @@ public struct Snippet: Hashable, Codable, Sendable, Identifiable {
     /// Queries longer than this end tracking, so a longer trigger could never be typed.
     public static let maxTriggerLength = TriggerEngine.maxQueryLength
 
-    /// The form triggers are compared in.
+    /// The form triggers are compared in: folded like emoji search terms (`TextFolding`), so
+    /// `Café`, `cafe` and `CAFE` are the same trigger.
     public static func normalizedTrigger(_ trigger: String) -> String {
-        trigger.lowercased()
+        TextFolding.fold(trigger)
     }
 
     /// Nil when `trigger` is usable for the snippet `id` given the other `snippets`.

@@ -53,7 +53,9 @@ public struct JevClient: JevRanking {
         (lol, lmao, ty = thank you, gm = good morning, gn = good night, sus = suspicious, ded = dying of \
         laughter, bet = agreed, goat = greatest of all time, bday = birthday, rip = sorrow or a fail). \
         If state.text_before is present it is the message being written; use its tone to pick the fitting \
-        emotion. Prefer the emoji people commonly send for this meaning over literal but rarely used ones.
+        emotion. Prefer the emoji people commonly send for this meaning over literal but rarely used ones. \
+        The query may also be a word in another language, often typed without diacritics (Romanian \
+        pisica = cat, multumesc = thank you; Spanish perro = dog, fuego = fire): read it in that language.
         """
 
     /// One shared session: keep-alive connection reuse is what makes repeated calls ~150 ms.

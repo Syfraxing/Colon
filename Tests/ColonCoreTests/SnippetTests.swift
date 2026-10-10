@@ -21,9 +21,10 @@ final class SnippetTriggerTests: XCTestCase {
         XCTAssertEqual(Snippet.problem(with: String(repeating: "a", count: 33), among: []), .tooLong)
     }
 
-    func testTriggersAreUniqueIgnoringCase() {
+    func testTriggersAreUniqueIgnoringCaseAndAccents() {
         XCTAssertEqual(Snippet.problem(with: "email", among: [email]), .duplicate)
         XCTAssertEqual(Snippet.problem(with: "EMAIL", among: [email]), .duplicate)
+        XCTAssertEqual(Snippet.problem(with: "cafe", among: [Snippet(trigger: "Café", text: "x")]), .duplicate)
         // Editing a snippet does not collide with itself.
         XCTAssertNil(Snippet.problem(with: "email", among: [email], excluding: email.id))
         XCTAssertNil(Snippet.problem(with: "emails", among: [email]))
@@ -54,6 +55,13 @@ final class SnippetSearchTests: XCTestCase {
         XCTAssertEqual(triggers("EMA", snippets), ["email"])
         XCTAssertEqual(triggers(":ema", snippets), ["email"])
         XCTAssertEqual(triggers("email:", snippets), ["email"])
+    }
+
+    /// Folded like emoji search (`TextFolding`): accents never matter, either way round.
+    func testMatchingIgnoresAccents() {
+        XCTAssertEqual(triggers("cafe", [snippet("café")]), ["café"])
+        XCTAssertEqual(triggers("CAFÉ", [snippet("cafe")]), ["cafe"])
+        XCTAssertEqual(triggers("semn", [snippet("semnătură")]), ["semnătură"])
     }
 
     func testOrderingExactThenPrefixThenContains() {
@@ -186,6 +194,16 @@ final class SnippetEngineTests: XCTestCase {
         engine.update(query: "", context: PredictionContext())
         XCTAssertFalse(engine.suggestions.isEmpty)
         XCTAssertTrue(engine.suggestions.allSatisfy { $0.snippet == nil })
+    }
+
+    func testSnippetStaysFirstWhenSearchLanguagesLoad() async throws {
+        settings.snippets = [Snippet(trigger: "inima2", text: "<3")]
+        let engine = makeEngine()
+        engine.update(query: "inima", context: PredictionContext())
+        XCTAssertEqual(engine.suggestions.first?.snippet?.trigger, "inima2")
+        await engine.reloadLanguages(["ro"]).value
+        XCTAssertEqual(engine.suggestions.first?.snippet?.trigger, "inima2")
+        XCTAssertEqual(engine.suggestions.dropFirst().first?.emoji?.char, "❤️", "Romanian names now match too")
     }
 
     func testSnippetsPersistInDefaults() {

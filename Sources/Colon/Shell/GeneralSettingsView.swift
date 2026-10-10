@@ -66,6 +66,10 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section("Search languages") {
+                SearchLanguagesRow(settings: settings)
+            }
+
             Section("Feedback") {
                 Toggle(isOn: $settings.playsInsertSound) {
                     Text("Sound on insert")
@@ -184,6 +188,61 @@ private struct ValueStepper: View {
         } label: {
             Text(title)
         }
+    }
+}
+
+/// English is always searched; extra CLDR languages are picked in a checklist popover.
+private struct SearchLanguagesRow: View {
+    @ObservedObject var settings: AppSettings
+    @State private var showsPicker = false
+
+    private static let languages: [(code: String, name: String)] = SearchLanguages.supported
+        .map { ($0, SearchLanguages.displayName(for: $0)) }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+    var body: some View {
+        LabeledContent {
+            Button("Choose…") { showsPicker.toggle() }
+                .popover(isPresented: $showsPicker, arrowEdge: .trailing) { picker }
+        } label: {
+            Text(summary)
+            Text("Find emoji by their names in these languages too, e.g. \(settings.triggerString)inima → ❤️ in Romanian. Accents are optional; shortcodes always work.")
+        }
+    }
+
+    private var summary: String {
+        (["English"] + settings.searchLanguages.map { SearchLanguages.displayName(for: $0) })
+            .joined(separator: ", ")
+    }
+
+    private var picker: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("English", isOn: .constant(true))
+                    .disabled(true)
+                    .help("English names and shortcodes are always searched.")
+                Divider()
+                ForEach(Self.languages, id: \.code) { language in
+                    Toggle(language.name, isOn: binding(for: language.code))
+                }
+            }
+            .toggleStyle(.checkbox)
+            .padding(14)
+        }
+        .frame(width: 260, height: 360)
+    }
+
+    private func binding(for code: String) -> Binding<Bool> {
+        Binding(
+            get: { settings.searchLanguages.contains(code) },
+            set: { isOn in
+                if isOn {
+                    if !settings.searchLanguages.contains(code) { settings.searchLanguages.append(code) }
+                } else {
+                    settings.searchLanguages.removeAll { $0 == code }
+                }
+            }
+        )
     }
 }
 

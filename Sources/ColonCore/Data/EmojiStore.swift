@@ -1,18 +1,19 @@
 import Foundation
 
-/// Loads the bundled emoji dataset once and builds the indexes `EmojiSearch` runs on. OWNER: core worker.
+/// Loads the bundled emoji dataset once and builds the indexes `EmojiSearch` runs on, plus the
+/// per-language search terms (`languageIndex`), each loaded on first use. OWNER: core worker.
 public final class EmojiStore: @unchecked Sendable {
     public static let shared = EmojiStore()
 
-    /// Name of the SwiftPM resource bundle that carries `emoji.json`.
+    /// Name of the SwiftPM resource bundle that carries `emoji.json` and `i18n/`.
     static let resourceBundleName = "Colon_ColonCore.bundle"
     static let resourceName = "emoji.json"
 
     /// Every emoji in dataset order (Unicode category order).
     public let all: [Emoji]
 
-    /// Searchable terms sorted by `key` (bytewise) for binary-searched prefix lookups.
-    let terms: [Term]
+    /// English shortcodes, keywords and name words (folded, see `TextFolding`).
+    let baseIndex: TermIndex
     /// Per emoji (same index as `all`): lowercased UTF-8 shortcodes, used for fuzzy matching.
     let shortcodeBytes: [[[UInt8]]]
 
@@ -22,7 +23,12 @@ public final class EmojiStore: @unchecked Sendable {
     private let indexByShortcode: [String: Int]
     private let indexByID: [String: Int]
 
-    /// All instance state is immutable after init, which is what makes `@unchecked Sendable` sound.
+    /// Loaded languages by code (nil value = no bundled file). Guarded by `languageLock`.
+    private var languages: [String: Language?] = [:]
+    private let languageLock = NSLock()
+
+    /// All other instance state is immutable after init; `languages` is only touched under
+    /// `languageLock`. That is what makes `@unchecked Sendable` sound.
     public init(emoji: [Emoji]? = nil) {
         all = emoji ?? Self.loadBundledDataset()
 
@@ -55,7 +61,7 @@ public final class EmojiStore: @unchecked Sendable {
 
             seen.removeAll(keepingCapacity: true)
             for keyword in emoji.keywords {
-                let lowered = keyword.lowercased()
+                let lowered = TextFolding.fold(keyword)
                 guard seen.insert(lowered).inserted else { continue }
                 let bytes = Array(lowered.utf8)
                 let isCountryCode = isFlag && bytes.count == 2
@@ -63,13 +69,12 @@ public final class EmojiStore: @unchecked Sendable {
             }
 
             seen.removeAll(keepingCapacity: true)
-            for word in Self.words(in: emoji.name) where seen.insert(word).inserted {
+            for word in Self.words(in: TextFolding.fold(emoji.name)) where seen.insert(word).inserted {
                 terms.append(Term(key: Array(word.utf8), emoji: ref, kind: .nameWord, isPrimary: false))
             }
         }
 
-        terms.sort { Self.less($0.key, $1.key) }
-        self.terms = terms
+        baseIndex = TermIndex(terms)
         self.shortcodeBytes = shortcodeBytes
         indexByShortcode = byShortcode
         indexByID = byID
@@ -100,6 +105,55 @@ public final class EmojiStore: @unchecked Sendable {
         indexByID[id]
     }
 
+    /// Search terms of a `SearchLanguages` code, loaded from `i18n/<code>.json.deflate` on first use
+    /// and cached; nil when no such file is bundled. The first call per language decompresses and
+    /// indexes ~2000 entries, so make it off the main thread (`SuggestionEngine` does).
+    func language(_ code: String) -> Language? {
+        languageLock.lock()
+        defer { languageLock.unlock() }
+        if let cached = languages[code] { return cached }
+        let loaded = Self.bundledResourceURL("i18n/\(code).json.deflate").flatMap { url in
+            try? Data(contentsOf: url, options: .mappedIfSafe)
+        }.flatMap { try? language(deflatedJSON: $0) }
+        languages[code] = loaded
+        return loaded
+    }
+
+    /// Builds a language from its file: `{"<Emoji.id>": ["<name>", "<keyword>", ...]}` as raw
+    /// DEFLATE. The name's words rank as name words, the rest as keywords. Unknown ids (emoji the
+    /// running macOS cannot render) are skipped.
+    func language(deflatedJSON data: Data) throws -> Language {
+        let json = try (data as NSData).decompressed(using: .zlib) as Data
+        let entries = try JSONDecoder().decode([String: [String]].self, from: json)
+        var terms: [Term] = []
+        terms.reserveCapacity(entries.count * 12)
+        var names: [Int: String] = [:]
+        names.reserveCapacity(entries.count)
+        var seen = Set<String>()
+        for (id, values) in entries {
+            guard let index = indexByID[id], let name = values.first else { continue }
+            let ref = Int32(index)
+            if !name.isEmpty { names[index] = name }
+            seen.removeAll(keepingCapacity: true)
+            for keyword in values.dropFirst() {
+                let folded = TextFolding.fold(keyword)
+                guard seen.insert(folded).inserted else { continue }
+                terms.append(Term(key: Array(folded.utf8), emoji: ref, kind: .keyword, isPrimary: false))
+            }
+            for word in Self.words(in: TextFolding.fold(name)) where seen.insert(word).inserted {
+                terms.append(Term(key: Array(word.utf8), emoji: ref, kind: .nameWord, isPrimary: false))
+            }
+        }
+        return Language(index: TermIndex(terms), names: names)
+    }
+
+    /// One extra search language.
+    struct Language: Sendable {
+        let index: TermIndex
+        /// CLDR name per emoji (position in `all`), folded like the terms: `inima rosie`.
+        let names: [Int: String]
+    }
+
     // MARK: - Index
 
     struct Term: Sendable {
@@ -114,15 +168,24 @@ public final class EmojiStore: @unchecked Sendable {
         let isPrimary: Bool
     }
 
-    /// First index in `terms` whose key is not less than `prefix`.
-    func lowerBound(_ prefix: [UInt8]) -> Int {
-        var low = 0
-        var high = terms.count
-        while low < high {
-            let mid = (low + high) / 2
-            if Self.less(terms[mid].key, prefix) { low = mid + 1 } else { high = mid }
+    /// Searchable terms sorted by `key` (bytewise) for binary-searched prefix lookups.
+    struct TermIndex: Sendable {
+        let terms: [Term]
+
+        init(_ terms: [Term]) {
+            self.terms = terms.sorted { EmojiStore.less($0.key, $1.key) }
         }
-        return low
+
+        /// First index in `terms` whose key is not less than `prefix`.
+        func lowerBound(_ prefix: [UInt8]) -> Int {
+            var low = 0
+            var high = terms.count
+            while low < high {
+                let mid = (low + high) / 2
+                if EmojiStore.less(terms[mid].key, prefix) { low = mid + 1 } else { high = mid }
+            }
+            return low
+        }
     }
 
     static func less(_ lhs: [UInt8], _ rhs: [UInt8]) -> Bool {
@@ -161,24 +224,26 @@ public final class EmojiStore: @unchecked Sendable {
             .map(\.emoji)
     }
 
-    /// In the packaged app the SwiftPM bundle is copied into `Colon.app/Contents/Resources/`, where
-    /// `Bundle.module` does not look (its accessor would trap), so check there first.
-    static func bundledDatasetURL() -> URL? {
+    /// A file in the ColonCore resource bundle. In the packaged app the SwiftPM bundle is copied into
+    /// `Colon.app/Contents/Resources/`, where `Bundle.module` does not look (its accessor would
+    /// trap), so check there first.
+    static func bundledResourceURL(_ relativePath: String) -> URL? {
         let fileManager = FileManager.default
-        if let resources = Bundle.main.resourceURL {
-            let bundle = resources.appendingPathComponent(resourceBundleName, isDirectory: true)
-            for candidate in [
-                bundle.appendingPathComponent(resourceName),
-                bundle.appendingPathComponent("Contents/Resources/\(resourceName)"),
-            ] where fileManager.fileExists(atPath: candidate.path) {
-                return candidate
-            }
+        func find(in bundle: URL) -> URL? {
+            [
+                bundle.appendingPathComponent(relativePath),
+                bundle.appendingPathComponent("Contents/Resources/\(relativePath)"),
+            ].first { fileManager.fileExists(atPath: $0.path) }
         }
-        return Bundle.module.url(forResource: "emoji", withExtension: "json")
+        if let resources = Bundle.main.resourceURL,
+           let url = find(in: resources.appendingPathComponent(resourceBundleName, isDirectory: true)) {
+            return url
+        }
+        return find(in: Bundle.module.bundleURL)
     }
 
     private static func loadBundledDataset() -> [Emoji] {
-        guard let url = bundledDatasetURL() else {
+        guard let url = bundledResourceURL(resourceName) else {
             fatalError("Colon: \(resourceName) is missing from \(resourceBundleName)")
         }
         do {

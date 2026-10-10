@@ -40,6 +40,7 @@ public final class AppSettings: ObservableObject {
         public static let playsInsertSound = "playsInsertSound"
         public static let hapticFeedback = "hapticFeedback"
         public static let snippets = "snippets"
+        public static let searchLanguages = "searchLanguages"
     }
 
     /// Excluded on first launch: apps with their own `:shortcode:` picker, plus terminals, IDEs and
@@ -112,8 +113,12 @@ public final class AppSettings: ObservableObject {
     /// Text snippets (`:sig` → signature). Personal data: kept in local `UserDefaults` only, never
     /// sent to Jev and never logged.
     @Published public var snippets: [Snippet] { didSet { defaults.set(Self.encode(snippets), forKey: Key.snippets) } }
+    /// Languages searched besides English (`SearchLanguages` codes), e.g. `["ro"]`. Defaults to the
+    /// supported macOS preferred languages; English names, keywords and shortcodes always work.
+    @Published public var searchLanguages: [String] { didSet { defaults.set(searchLanguages, forKey: Key.searchLanguages) } }
 
-    public init(defaults: UserDefaults = .standard) {
+    /// `preferredLanguages` (the macOS language list) only seeds the `searchLanguages` default.
+    public init(defaults: UserDefaults = .standard, preferredLanguages: [String] = Locale.preferredLanguages) {
         self.defaults = defaults
         defaults.register(defaults: [
             Key.isEnabled: true,
@@ -131,6 +136,7 @@ public final class AppSettings: ObservableObject {
             Key.pickerLayout: PickerLayout.list.rawValue,
             Key.playsInsertSound: false,
             Key.hapticFeedback: true,
+            Key.searchLanguages: SearchLanguages.defaultSelection(preferredLanguages: preferredLanguages),
         ])
         isEnabled = defaults.bool(forKey: Key.isEnabled)
         let trigger = defaults.string(forKey: Key.triggerString) ?? ":"
@@ -149,6 +155,7 @@ public final class AppSettings: ObservableObject {
         playsInsertSound = defaults.bool(forKey: Key.playsInsertSound)
         hapticFeedback = defaults.bool(forKey: Key.hapticFeedback)
         snippets = Self.decodeSnippets(defaults.data(forKey: Key.snippets))
+        searchLanguages = SearchLanguages.sanitized(defaults.stringArray(forKey: Key.searchLanguages) ?? [])
     }
 
     public func isExcluded(bundleID: String?) -> Bool {

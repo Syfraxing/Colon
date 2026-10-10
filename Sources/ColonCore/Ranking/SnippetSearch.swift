@@ -22,7 +22,8 @@ public enum SnippetSearch {
     /// Shorter queries would make "contains" match almost every trigger.
     static let minimumContainsLength = 2
 
-    /// How `query` (already normalised like the emoji search: lowercased, colons stripped) relates to `trigger`.
+    /// How `query` (already normalised and folded like the emoji search: `TextFolding.fold`, colons
+    /// stripped) relates to `trigger`.
     public static func match(query: String, trigger: String) -> Match? {
         guard !query.isEmpty else { return nil }
         let key = Snippet.normalizedTrigger(trigger)
@@ -35,7 +36,7 @@ public enum SnippetSearch {
     /// Snippets matching `query`, best first (exact > prefix > contains, then shorter trigger, then
     /// the user's order). Snippets with no text or an unusable trigger never match.
     public static func search(_ query: String, in snippets: [Snippet]) -> [Hit] {
-        let normalized = EmojiSearch.normalize(query)
+        let normalized = TextFolding.fold(EmojiSearch.normalize(query))
         guard !normalized.isEmpty else { return [] }
         let hits = snippets.enumerated().compactMap { offset, snippet -> (hit: Hit, order: Int)? in
             guard !snippet.text.isEmpty,

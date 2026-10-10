@@ -50,7 +50,8 @@ public final class SuggestionEngine: ObservableObject {
     private let settings: AppSettings
     private let store: EmojiStore
     private let usage: UsageStore
-    private let search: EmojiSearch
+    /// Rebuilt off-main by `reloadLanguages` when `settings.searchLanguages` changes.
+    private var search: EmojiSearch
     private let injectedJev: JevRanking?
     private let popular: [Emoji]
 
@@ -58,6 +59,7 @@ public final class SuggestionEngine: ObservableObject {
     private var client: JevClient?
     private var keyLoaded = false
     private var keyLoad: Task<Void, Never>?
+    private var languageLoad: Task<Void, Never>?
     private var lastNetworkUse: ContinuousClock.Instant?
     private var cache = LRUCache<CacheKey, [String: Double]>(capacity: 64)
     private var task: Task<Void, Never>?
@@ -82,12 +84,21 @@ public final class SuggestionEngine: ObservableObject {
         popular = PopularEmoji.ids.compactMap { store.emoji(id: $0) }
         jevStatus = settings.useJev ? .idle : .disabled
         if jev == nil { reloadAPIKey() }
+        reloadLanguages(settings.searchLanguages)
 
         settings.$useJev
             .dropFirst()
             .sink { [weak self] _ in
                 // `@Published` fires before the property changes; read the settled value next tick.
                 DispatchQueue.main.async { self?.refreshStatus() }
+            }
+            .store(in: &cancellables)
+
+        settings.$searchLanguages
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] codes in
+                DispatchQueue.main.async { self?.reloadLanguages(codes) }
             }
             .store(in: &cancellables)
     }
@@ -181,6 +192,34 @@ public final class SuggestionEngine: ObservableObject {
             self.refreshStatus()
         }
         keyLoad = task
+        return task
+    }
+
+    /// Builds the local search for English plus `codes` (`SearchLanguages`) off the main thread,
+    /// then swaps it in. Until it lands the previous search (at launch: English only) answers.
+    /// The initializer starts it for `settings.searchLanguages` and repeats it when they change.
+    @discardableResult
+    public func reloadLanguages(_ codes: [String]) -> Task<Void, Never> {
+        languageLoad?.cancel()
+        let store = store
+        let usage = usage
+        let task = Task { [weak self] in
+            let search = await Task.detached(priority: .userInitiated) {
+                EmojiSearch(store: store, usage: usage, languages: codes)
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.search = search
+            // Cached Jev answers were blended against the old candidate pool.
+            self.cache.removeAll()
+            let normalized = EmojiSearch.normalize(self.query)
+            if !normalized.isEmpty, !self.orderFrozen {
+                self.localPool = search.search(normalized, limit: Self.localPoolSize,
+                                               boosts: self.usage.snapshot(query: normalized))
+                self.suggestions = SnippetSearch.merge(self.snippetHits, into: Array(self.localPool.prefix(self.maxResults)),
+                                                       limit: self.maxResults)
+            }
+        }
+        languageLoad = task
         return task
     }
 
@@ -311,16 +350,26 @@ public final class SuggestionEngine: ObservableObject {
     }
 
     /// Local top matches, then frecent, then popular emoji; deduplicated, at most `maxCandidates`.
+    /// Local matches carry their names in the search languages as leading keywords, so Jev's option
+    /// text (`JevClient.criterion`) reads `🐶 dog face; fata de caine, …` for a Romanian `caine`.
     private func candidatePool(boosts: UsageStore.Snapshot) -> [Emoji] {
         var pool: [Emoji] = []
         var seen = Set<String>()
         func add(_ emoji: Emoji) {
             if pool.count < Self.maxCandidates, seen.insert(emoji.id).inserted { pool.append(emoji) }
         }
-        localPool.prefix(Self.localCandidates).compactMap(\.emoji).forEach(add)
+        let search = search
+        localPool.prefix(Self.localCandidates).compactMap(\.emoji).forEach { add(Self.withLocalizedNames($0, search.localizedNames(of: $0))) }
         usage.top(Self.frecentCandidates).compactMap { store.emoji(id: $0) }.forEach(add)
         popular.forEach(add)
         return pool
+    }
+
+    nonisolated static func withLocalizedNames(_ emoji: Emoji, _ names: [String]) -> Emoji {
+        guard !names.isEmpty else { return emoji }
+        return Emoji(id: emoji.id, char: emoji.char, name: emoji.name, category: emoji.category,
+                     shortcodes: emoji.shortcodes, keywords: names + emoji.keywords,
+                     supportsSkinTone: emoji.supportsSkinTone)
     }
 
     // MARK: - Jev plumbing

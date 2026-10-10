@@ -81,7 +81,9 @@ SOFTWARE.
 ## Unicode CLDR / Unicode emoji data
 
 emojibase's names and keywords derive from the Unicode Common Locale Data Repository (CLDR) and
-Unicode emoji data files.
+Unicode emoji data files. The search-language files (`Sources/ColonCore/Resources/i18n/`) are
+built from the CLDR annotations and derived annotations in the `cldr-annotations-full` and
+`cldr-annotations-derived-full` packages 48.2.0 — https://github.com/unicode-org/cldr-json
 
 UNICODE LICENSE V3
 
