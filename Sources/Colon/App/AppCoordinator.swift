@@ -136,6 +136,8 @@ final class AppCoordinator: NSObject, InputControllerDelegate {
         } else {
             picker.moveSelection(by: delta)
         }
+        // The user moved the highlight: a late Jev answer must not reorder rows under it.
+        if picker.selectedSuggestion != nil { engine.freezeOrder() }
     }
 
     func inputCommitSelection() -> String? {

@@ -55,6 +55,8 @@ final class PickerPanelController {
         model.onCancel = { [weak self] in self?.dismiss() }
         model.onSearchTextChange = { [weak self] text in self?.searchTextChanged(text) }
         model.onSelectionChanged = { [weak self] in
+            // Keyboard or hover moved the highlight (search mode included): freeze the engine order.
+            self?.engine.freezeOrder()
             guard let self, self.isOnScreen else { return }
             Feedback.selectionChanged(self.settings)
         }
@@ -435,7 +437,11 @@ final class PickerPanelController {
 extension PickerPanelController: PickerMouseHandling {
     func pickerMouseMoved(at windowPoint: NSPoint) -> Bool {
         guard model.mode == .inline else { return false }
-        if isOnScreen, let index = rowIndex(at: windowPoint) { model.selectRow(index) }
+        if isOnScreen, let index = rowIndex(at: windowPoint) {
+            model.selectRow(index)
+            // Pointing at a row, the highlighted one included, freezes the order.
+            engine.freezeOrder()
+        }
         return true
     }
 

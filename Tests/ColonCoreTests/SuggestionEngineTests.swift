@@ -244,6 +244,39 @@ final class SuggestionEngineTests: XCTestCase {
         XCTAssertNotEqual(engine.suggestions.count, 0)
     }
 
+    /// The picker freezes the engine when the user arrows to (or hovers) a row. A late Jev answer
+    /// that favours matches below the visible rows must not push the highlighted emoji out.
+    func testLateAnswerCannotDropHighlightedRowAfterFreeze() async {
+        settings.useJev = false
+        settings.maxResults = 16
+        let probe = makeEngine()
+        probe.update(query: "smile", context: PredictionContext())
+        let pool = ids(probe)
+        XCTAssertGreaterThanOrEqual(pool.count, 13)
+        settings.maxResults = 8
+        settings.useJev = true
+        let late = [pool[10]: 0.6, pool[12]: 0.3]
+
+        // Control: unfrozen, this answer drops the last visible row.
+        jev.answer("smile", late, after: .milliseconds(30))
+        let control = makeEngine()
+        control.update(query: "smile", context: PredictionContext())
+        let lastRow = ids(control)[7]
+        await waitUntil { !control.isRefining }
+        XCTAssertFalse(ids(control).contains(lastRow), "the answer must push the last row out")
+
+        // The user highlights row 8 before Jev answers: the order freezes.
+        let engine = makeEngine()
+        engine.update(query: "smile", context: PredictionContext())
+        let shown = ids(engine)
+        XCTAssertEqual(shown[7], lastRow)
+        engine.freezeOrder()
+        await waitUntil { !engine.isRefining }
+        XCTAssertEqual(jev.calls.count, 2)
+        XCTAssertEqual(ids(engine), shown, "order and membership stay frozen")
+        XCTAssertEqual(engine.suggestions[7].id, lastRow)
+    }
+
     func testShortQueriesSkipJev() async {
         let engine = makeEngine()
         engine.update(query: "j", context: PredictionContext())
