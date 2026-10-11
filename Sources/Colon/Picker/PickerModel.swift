@@ -42,11 +42,10 @@ final class PickerModel: ObservableObject {
     @Published private(set) var jevStatus: JevStatus = .idle
     @Published private(set) var selectedIndex = 0
     @Published private(set) var insertPulse: InsertPulse?
-    /// The user moved the highlight with the keyboard for the current query. For the bare-trigger
-    /// strip this is "engaged": only then do Return/Tab insert, so only then is a row highlighted.
-    @Published private(set) var isEngaged = false
-    /// The pointer rests on a row of the unengaged strip (clicking it inserts).
-    @Published private(set) var pointerHighlight = false
+    /// Engaged strip, pointer pill and frozen order: one capture, one query.
+    @Published private(set) var highlight = PickerHighlight()
+    var isEngaged: Bool { highlight.isEngaged }
+    var pointerHighlight: Bool { highlight.pointerHighlight }
 
     // Search mode
     @Published private(set) var searchText = ""
@@ -72,8 +71,6 @@ final class PickerModel: ObservableObject {
     weak var searchField: NSTextField?
 
     private var syncScheduled = false
-    /// The user moved the highlight for the current query: keep their emoji and freeze the order.
-    private var userMovedHighlight = false
 
     let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
@@ -142,17 +139,16 @@ final class PickerModel: ObservableObject {
         var incoming = Array(snapshot.suggestions.prefix(limit))
         let previousID = selectedSuggestion?.id
 
-        if queryChanged {
-            userMovedHighlight = false
-            if isEngaged { isEngaged = false }
-            if pointerHighlight { pointerHighlight = false }
-        } else if userMovedHighlight {
+        var nextHighlight = highlight
+        let reset = nextHighlight.sync(queryChanged: queryChanged)
+        if nextHighlight != highlight { highlight = nextHighlight }
+        if !reset && highlight.userMovedHighlight {
             incoming = Self.preservingOrder(of: suggestions, updatedWith: incoming)
         }
 
         let reordered = !queryChanged && incoming.map(\.id) != suggestions.map(\.id)
         let newIndex: Int
-        if queryChanged || !userMovedHighlight {
+        if reset || !highlight.userMovedHighlight {
             newIndex = 0
         } else if let previousID, let i = incoming.firstIndex(where: { $0.id == previousID }) {
             newIndex = i
@@ -207,8 +203,7 @@ final class PickerModel: ObservableObject {
         }
         let count = suggestions.count
         let next = ((selectedIndex + delta) % count + count) % count
-        userMovedHighlight = true
-        if !isEngaged { isEngaged = true }
+        highlight.moveByKeyboard()
         if next != selectedIndex { onSelectionChanged?() }
         setSelection(next)
         if mode == .search { requestScroll("row/\(suggestions[next].id)") }
@@ -218,10 +213,10 @@ final class PickerModel: ObservableObject {
     /// included, freezes the order so a late Jev rerank cannot swap the row under the pointer.
     func selectRow(_ index: Int) {
         guard suggestions.indices.contains(index) else { return }
-        userMovedHighlight = true
-        if isStripUnengaged && !pointerHighlight {
+        let tentative = isStripUnengaged && !pointerHighlight
+        if tentative || !highlight.userMovedHighlight { highlight.point(onUnengagedStrip: tentative) }
+        if tentative {
             // The faint pill appears under the pointer; no slide in from row 0, no haptic.
-            pointerHighlight = true
             selectedIndex = index
             return
         }
@@ -234,8 +229,7 @@ final class PickerModel: ObservableObject {
     func engage() {
         syncIfNeeded()
         guard isStripUnengaged else { return }
-        userMovedHighlight = true
-        isEngaged = true
+        highlight.moveByKeyboard()
         if pointerHighlight {
             // The faint pill under the pointer slides up to the first emoji.
             setSelection(0)
@@ -251,6 +245,12 @@ final class PickerModel: ObservableObject {
         syncIfNeeded()
         guard let id = selectedSuggestion?.id else { return }
         insertPulse = InsertPulse(id: id, serial: (insertPulse?.serial ?? 0) + 1)
+    }
+
+    /// The panel hid or shows a new capture: the next sync starts unengaged with no pointer pill,
+    /// even though the bare-trigger strip's query (`""`) is unchanged.
+    func beginCapture() {
+        highlight.beginCapture()
     }
 
     private func setSelection(_ index: Int) {
