@@ -127,6 +127,7 @@ final class PickerPanelController {
             t.disablesAnimations = true
             withTransaction(t) { model.layout = settings.pickerLayout }
         }
+        if !isActive || switching { model.beginCapture() }
         model.syncNow()
 
         if let caret {
@@ -151,6 +152,7 @@ final class PickerPanelController {
     func hide() {
         guard isActive else { return }
         isActive = false
+        model.beginCapture()
         anchorCaret = nil
         anchorIsFallback = false
         panel.allowsKey = false
