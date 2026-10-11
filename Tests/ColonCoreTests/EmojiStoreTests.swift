@@ -28,6 +28,18 @@ final class EmojiStoreTests: XCTestCase {
         XCTAssertTrue(thumbsUp.keywords.contains("like"))
     }
 
+    func testPrimaryIDBeatsAnotherEmojisAlias() {
+        let store = EmojiStore.shared
+        let shadowed = store.all.filter { store.emoji(forShortcode: $0.id)?.id != $0.id }.map(\.id)
+        XCTAssertEqual(shadowed, [], "an alias of another emoji must not shadow a primary id")
+
+        let search = EmojiSearch(store: store, usage: nil)
+        for code in ["point_up", "email", "up"] {
+            XCTAssertEqual(store.emoji(forShortcode: code)?.id, search.search(code, limit: 1).first?.emoji?.id,
+                           "auto-replace of :\(code): must insert the picker's top row")
+        }
+    }
+
     func testVersionFilterDropsGlyphsTheOSCannotRender() throws {
         let json = """
         [{"id":"old","char":"😀","name":"grinning face","category":"Smileys & Emotion","shortcodes":["old"],"keywords":[],"supportsSkinTone":false},

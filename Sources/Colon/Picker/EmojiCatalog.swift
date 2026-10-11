@@ -26,7 +26,7 @@ enum EmojiCatalog {
     }
 
     static func frequentSection(store: EmojiStore, usage: UsageStore, limit: Int = 18) -> EmojiSection? {
-        let emoji = usage.top(limit).compactMap { store.emoji(forShortcode: $0) }
+        let emoji = usage.top(limit).compactMap { store.emoji(id: $0) }
         guard !emoji.isEmpty else { return nil }
         return EmojiSection(id: EmojiSection.frequentID, title: "Frequently Used", symbol: "clock", emoji: emoji)
     }

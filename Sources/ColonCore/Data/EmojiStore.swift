@@ -39,6 +39,13 @@ public final class EmojiStore: @unchecked Sendable {
         terms.reserveCapacity(all.count * 14)
         shortcodeBytes.reserveCapacity(all.count)
 
+        // Primary ids claim their shortcode before any alias, so an alias of an earlier emoji
+        // (👆 `point_up_2` lists `point_up`) never shadows a later emoji's id (☝️ `point_up`).
+        for (index, emoji) in all.enumerated() {
+            let id = emoji.id.lowercased()
+            byShortcode[id] = byShortcode[id] ?? index
+        }
+
         for (index, emoji) in all.enumerated() {
             let ref = Int32(index)
             let isFlag = emoji.category == "Flags"
