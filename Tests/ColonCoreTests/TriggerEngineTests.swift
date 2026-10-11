@@ -3,7 +3,7 @@ import XCTest
 @testable import ColonCore
 
 final class TriggerEngineTests: XCTestCase {
-    private let shortcodes: Set<String> = ["joy", "smile", "+1", "100", "t-rex"]
+    private let shortcodes: Set<String> = ["joy", "smile", "+1", "100", "t-rex", "fire"]
 
     private func makeEngine(trigger: String = ":", minQueryLength: Int = 1, autoReplace: Bool = true) -> TriggerEngine {
         let known = shortcodes
@@ -447,6 +447,33 @@ final class TriggerEngineTests: XCTestCase {
         XCTAssertNil(engine.query)
         // ":xyz:" ends with a trigger char, not a boundary: ":xyz:abc" does not re-trigger.
         type("abc", into: &engine)
+        XCTAssertNil(engine.query)
+    }
+
+    /// `:fire::fire:` → 🔥🔥: after an auto-replace the caret follows an emoji, which is a boundary.
+    func testConsecutiveClosingTriggerCommits() {
+        var engine = makeEngine()
+        type(":fire", into: &engine)
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.commitShortcode("fire", deleteCount: 5), swallow: true))
+        type(":", into: &engine)
+        XCTAssertEqual(engine.query, "", "a trigger right after the emoji opens a query")
+        type("fire", into: &engine)
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.commitShortcode("fire", deleteCount: 5), swallow: true))
+
+        engine = makeEngine(trigger: ";;")
+        type(";;fire;", into: &engine)
+        XCTAssertEqual(type(";", into: &engine), TriggerResult(.commitShortcode("fire", deleteCount: 7), swallow: true))
+        type(";;fire;", into: &engine)
+        XCTAssertEqual(engine.query, "fire")
+        XCTAssertEqual(type(";", into: &engine), TriggerResult(.commitShortcode("fire", deleteCount: 7), swallow: true))
+    }
+
+    func testTriggerAfterUnknownClosingTriggerStaysLiteral() {
+        var engine = makeEngine()
+        type(":xyz:", into: &engine)
+        // ":xyz::" — the caret follows a literal ":", not a boundary.
+        XCTAssertEqual(type(":", into: &engine), TriggerResult(.none))
+        type("fire", into: &engine)
         XCTAssertNil(engine.query)
     }
 

@@ -322,7 +322,8 @@ public struct TriggerEngine: Sendable {
         }
         // Everything typed except the final (swallowed) closing character must be deleted.
         let deleteCount = triggerChars.count * 2 + current.count - 1
-        endTracking(boundary: false)
+        // The caret will follow the inserted emoji, which is a boundary (`:fire::fire:`).
+        endTracking(boundary: true)
         return TriggerResult(.commitShortcode(current, deleteCount: deleteCount), swallow: true)
     }
 

@@ -80,6 +80,12 @@ final class PracticeControllerTests: XCTestCase {
         XCTAssertFalse(controller.isShowing)
     }
 
+    func testConsecutiveClosingTriggersBothReplace() {
+        XCTAssertTrue(type(":fire::fire:"))
+        XCTAssertEqual(replacements.map(\.0), [5, 5])
+        XCTAssertEqual(replacements.map(\.1), ["🔥", "🔥"])
+    }
+
     func testClickEndsTheCapture() {
         type(":ha")
         XCTAssertTrue(controller.isShowing)
